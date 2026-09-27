@@ -19,6 +19,21 @@ from zeroize.erase.overwrite import _fill_buffer, _verification_offsets
 from zeroize.erase.verify import _find_signature, _sample_offsets
 from zeroize.models import DeviceKind
 
+#: Passed to _apply_protection so the protection tests see only the fixture.
+#:
+#: Without this the check reads the REAL /proc/self/mountinfo, and a fixture
+#: device called /dev/sda resolves to whatever /dev/sda is on the machine
+#: running the tests. That passes on a laptop with no such disk and fails on a
+#: CI runner rooted on /dev/sda1 - the interlock firing correctly, on the
+#: wrong mounts.
+_NO_HOST_MOUNTS: dict[str, list[str]] = {}
+_NO_HOST_SWAP: set[str] = set()
+
+
+def _protect(devices) -> None:
+    """Apply protection using the fixture's own view of the world."""
+    _apply_protection(devices, swap_sources=set(_NO_HOST_SWAP), mount_table=dict(_NO_HOST_MOUNTS))
+
 
 def _lsblk_node(**overrides) -> dict:
     node = {
@@ -56,7 +71,7 @@ class TestSystemDiskProtection:
             ]
         )
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
 
         assert device.is_system
         assert not device.can_be_erased
@@ -79,7 +94,7 @@ class TestSystemDiskProtection:
             ],
         )
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
         assert device.is_system
 
     def test_protection_reaches_through_nested_mappings(self):
@@ -111,7 +126,7 @@ class TestSystemDiskProtection:
             ]
         )
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
         assert device.is_system
 
     @pytest.mark.parametrize("mountpoint", ["/", "/boot", "/var"])
@@ -126,7 +141,7 @@ class TestSystemDiskProtection:
         """
         node = _lsblk_node(pttype="", fstype="ext4", mountpoint=mountpoint, children=[])
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
 
         assert device.mountpoints == [mountpoint]
         assert device.is_mounted
@@ -143,14 +158,14 @@ class TestSystemDiskProtection:
             children=[],
         )
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
         assert device.is_system
 
     def test_whole_device_mounted_somewhere_harmless_is_still_erasable(self):
         """Mounted is not the same as system - the engine unmounts and proceeds."""
         node = _lsblk_node(pttype="", fstype="ext4", mountpoint="/mnt/scratch", children=[])
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
 
         assert device.is_mounted
         assert not device.is_system
@@ -159,7 +174,7 @@ class TestSystemDiskProtection:
     def test_unpartitioned_unmounted_device_is_erasable(self):
         node = _lsblk_node(pttype="", children=[])
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
 
         assert not device.is_mounted
         assert device.can_be_erased
@@ -177,7 +192,7 @@ class TestSystemDiskProtection:
             ]
         )
         device = _build_device(node)
-        _apply_protection([device])
+        _protect([device])
 
         assert not device.is_system
         assert device.can_be_erased
@@ -186,13 +201,13 @@ class TestSystemDiskProtection:
 
     def test_an_unmounted_drive_is_erasable(self):
         device = _build_device(_lsblk_node())
-        _apply_protection([device])
+        _protect([device])
         assert device.can_be_erased
         assert not device.is_mounted
 
     def test_read_only_devices_are_never_erasable(self):
         device = _build_device(_lsblk_node(ro=True))
-        _apply_protection([device])
+        _protect([device])
         assert not device.can_be_erased
 
 
@@ -803,3 +818,48 @@ class TestOperatorName:
             machine="bench-1",
         )
         assert summary.operator == "Cody White"
+
+
+class TestProtectionIsolation:
+    """The protection tests must judge the fixture, not the host.
+
+    _mount_table() is keyed on a device's major:minor, obtained by stat()ing
+    the path - so a fixture that calls its fake disk /dev/sda resolves to the
+    real /dev/sda when the machine has one. On a developer's laptop there
+    usually is none and the test passes; on a CI runner rooted at /dev/sda1 the
+    interlock fires correctly against the host's mounts and the test fails,
+    having proved nothing about the code either way.
+
+    So the tests supply their own tables. This asserts they really do.
+    """
+
+    def test_a_supplied_table_stops_the_host_being_read(self, monkeypatch):
+        from zeroize.discovery import block_devices
+
+        def fail_if_called():  # pragma: no cover - the assertion is that it is not
+            raise AssertionError("_mount_table() was read despite a table being supplied")
+
+        monkeypatch.setattr(block_devices, "_mount_table", fail_if_called)
+        monkeypatch.setattr(block_devices, "_active_swap_sources", fail_if_called)
+
+        device = _build_device(_lsblk_node())
+        _protect([device])
+
+        assert not device.is_system
+
+    def test_the_host_is_read_when_nothing_is_supplied(self, monkeypatch):
+        """Production must still consult the running system. It is the interlock."""
+        from zeroize.discovery import block_devices
+
+        seen = {"mounts": False, "swap": False}
+        monkeypatch.setattr(
+            block_devices, "_mount_table", lambda: seen.__setitem__("mounts", True) or {}
+        )
+        monkeypatch.setattr(
+            block_devices, "_active_swap_sources", lambda: seen.__setitem__("swap", True) or set()
+        )
+
+        _apply_protection([_build_device(_lsblk_node())])
+
+        assert seen["mounts"], "production did not read the real mount table"
+        assert seen["swap"], "production did not read the real swap list"

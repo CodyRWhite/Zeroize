@@ -337,10 +337,29 @@ def _protection_reason(
     return walk(device.partitions)
 
 
-def _apply_protection(devices: list[Device]) -> None:
-    """Flag every device that carries the running system or the boot medium."""
-    swap_sources = _active_swap_sources()
-    mount_table = _mount_table()
+def _apply_protection(
+    devices: list[Device],
+    *,
+    swap_sources: set[str] | None = None,
+    mount_table: dict[str, list[str]] | None = None,
+) -> None:
+    """Flag every device that carries the running system or the boot medium.
+
+    *swap_sources* and *mount_table* default to the running system's, which is
+    the only thing production should ever use. They are parameters so a test
+    can supply its own.
+
+    That is not gold-plating. The mount table is keyed on the device's
+    ``major:minor``, read by stat()ing the path - so a test fixture calling its
+    fake disk ``/dev/sda`` picks up the real ``/dev/sda`` when one exists. On a
+    developer's machine it usually does not and the test passes; on a CI runner
+    whose root filesystem IS ``/dev/sda1`` the interlock correctly fires and
+    the test fails, having proved nothing either way.
+    """
+    if swap_sources is None:
+        swap_sources = _active_swap_sources()
+    if mount_table is None:
+        mount_table = _mount_table()
     for device in devices:
         # Fold anything the kernel knows about back onto the device, so the
         # rest of the application sees the complete picture too - the engine's
