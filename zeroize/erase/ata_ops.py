@@ -42,7 +42,7 @@ _log = get_logger("Ata")
 #: Documented in the README and printed to the log: if an erase is interrupted
 #: between arming and erasing, this is what unlocks the drive again with
 #: ``hdparm --user-master u --security-disable Zeroize /dev/sdX``.
-SECURITY_PASSWORD = "Zeroize"
+SECURITY_PASSWORD = "Zeroize"  # noqa: S105 - published, not secret; see below
 
 #: Multiplier applied to the drive's own estimate before giving up on it.
 #: Drives routinely overrun their advertised figure, and abandoning a secure

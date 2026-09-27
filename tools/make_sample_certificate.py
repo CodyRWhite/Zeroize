@@ -21,14 +21,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from zeroize.config import Settings  # noqa: E402
-from zeroize.discovery.simulation import simulated_devices  # noqa: E402
-from zeroize.erase.methods import (  # noqa: E402
+from zeroize.config import Settings
+from zeroize.discovery.simulation import simulated_devices
+from zeroize.erase.methods import (
     NVME_FORMAT_CRYPTO,
     NVME_SANITIZE_BLOCK,
     OVERWRITE_DOD_7,
 )
-from zeroize.models import EraseResult, JobState, PassResult, RunSummary  # noqa: E402
+from zeroize.models import EraseResult, JobState, PassResult, RunSummary
 
 
 def _build_summary() -> RunSummary:

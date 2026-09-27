@@ -191,7 +191,7 @@ def _process_alive(owner: str) -> bool:
         return True
 
     if sys.platform == "win32":
-        probe = subprocess.run(
+        probe = subprocess.run(  # noqa: S603 - argv list, never shell=True
             ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
             capture_output=True,
             text=True,
@@ -290,7 +290,10 @@ def _packaging_tree(tree: Path) -> tuple[Path, Path | None]:
     )
     # /var/tmp rather than /tmp: it is real storage on hosts where /tmp is a
     # tmpfs, and it is where large temporary build data belongs.
-    parent = Path("/var/tmp") if Path("/var/tmp").is_dir() else None
+    # S108 keys on the literal path. What follows is mkdtemp(), which
+    # creates a private 0700 directory with an unpredictable name - the
+    # thing the rule exists to require.
+    parent = Path("/var/tmp") if Path("/var/tmp").is_dir() else None  # noqa: S108
     temporary_root = Path(tempfile.mkdtemp(prefix="zeroize-pkg-", dir=str(parent) if parent else None))
     relocated = temporary_root / "stage"
     shutil.copytree(tree, relocated, symlinks=True)

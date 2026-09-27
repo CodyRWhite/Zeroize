@@ -42,7 +42,7 @@ def format_size(num_bytes: int) -> str:
 
 def format_duration(seconds: float) -> str:
     """Render a duration as ``HH:MM:SS``, matching the certificate's format."""
-    total = max(0, int(round(seconds)))
+    total = max(0, round(seconds))
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
@@ -89,7 +89,7 @@ class Partition:
     part_uuid: str = ""
     start_sector: int = 0
     sector_count: int = 0
-    children: list["Partition"] = field(default_factory=list)
+    children: list[Partition] = field(default_factory=list)
 
     @property
     def is_mounted(self) -> bool:

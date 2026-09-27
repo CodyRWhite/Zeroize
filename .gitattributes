@@ -1,0 +1,20 @@
+# Zeroize ships to Linux. A CR in a shell script is not a cosmetic problem: bash
+# reads it as part of the command and the script dies on its first line with
+# "$'\r': command not found". The build ISO script was bitten by exactly this
+# after being edited from Windows, so the rule is enforced here rather than
+# left to each editor's configuration.
+* text=auto eol=lf
+
+*.sh            text eol=lf
+*.py            text eol=lf
+*.desktop       text eol=lf
+*.policy        text eol=lf
+*.rules         text eol=lf
+*.spec          text eol=lf
+packaging/share/bin/zeroize text eol=lf
+
+*.png           binary
+*.pdf           binary
+*.iso           binary
+*.deb           binary
+*.rpm           binary

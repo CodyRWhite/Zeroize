@@ -85,7 +85,10 @@ def _verification_offsets(total_blocks: int, percent: float) -> set[int]:
         return chosen
 
     stride = total_blocks / (wanted - len(chosen))
-    jitter = random.Random(total_blocks).random()
+    # Picks WHICH blocks to sample, not what is written to them. A
+    # cryptographic generator would be slower and buy nothing, and the
+    # seed is deliberate so a verification pass is reproducible.
+    jitter = random.Random(total_blocks).random()  # noqa: S311
     for step in range(wanted - len(chosen)):
         index = int((step + jitter) * stride)
         if 0 <= index < total_blocks:

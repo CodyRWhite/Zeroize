@@ -128,9 +128,9 @@ class EraseOutcome:
     verification_passed: bool | None = None
 
     @classmethod
-    def failure(cls, message: str, *, passes: list[PassResult] | None = None) -> "EraseOutcome":
+    def failure(cls, message: str, *, passes: list[PassResult] | None = None) -> EraseOutcome:
         return cls(succeeded=False, errors=[message], passes=passes or [])
 
     @classmethod
-    def success(cls, passes: list[PassResult] | None = None, **kwargs) -> "EraseOutcome":
+    def success(cls, passes: list[PassResult] | None = None, **kwargs) -> EraseOutcome:
         return cls(succeeded=True, passes=passes or [], **kwargs)

@@ -26,14 +26,14 @@ from .sysinfo import collect_hardware_info, collect_system_info, machine_identif
 _log = get_logger("Discovery")
 
 __all__ = [
-    "discover_devices",
     "collect_hardware_info",
     "collect_system_info",
-    "machine_identifier",
     "controller_path_for",
+    "discover_devices",
+    "machine_identifier",
+    "read_ata_security",
     "read_capabilities",
     "read_sanitize_status",
-    "read_ata_security",
 ]
 
 

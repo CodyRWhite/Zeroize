@@ -112,7 +112,7 @@ def detach_and_rescan(device: Device) -> tuple[bool, str]:
     for host in hosts:
         try:
             Path(host).write_text("- - -\n", encoding="ascii")
-        except OSError as error:  # noqa: PERF203 - each host is independent
+        except OSError as error:
             _log.info("Rescan of %s failed: %s", host, error)
 
     run(["udevadm", "settle"], timeout=30.0, log_output=False)
@@ -287,7 +287,7 @@ def clear_freezes(devices: list[Device]) -> list[str]:
     for host in hosts:
         try:
             Path(host).write_text("- - -\n", encoding="ascii")
-        except OSError as error:  # noqa: PERF203 - hosts are independent
+        except OSError as error:
             _log.info("Rescan of %s failed: %s", host, error)
 
     run(["udevadm", "settle"], timeout=30.0, log_output=False)

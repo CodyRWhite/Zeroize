@@ -168,7 +168,7 @@ def collect_diagnostics(
             try:
                 shutil.copy2(source, logs / source.name)
                 copied += 1
-            except OSError as error:  # noqa: PERF203 - each file is independent
+            except OSError as error:
                 _log.info("Could not copy %s: %s", source, error)
     except OSError as error:
         (logs / "COLLECTION-FAILED.txt").write_text(str(error), encoding="utf-8")

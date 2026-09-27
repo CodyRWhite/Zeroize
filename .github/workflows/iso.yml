@@ -1,0 +1,84 @@
+name: Live ISO
+
+# Kept out of CI on purpose. This job needs root, a loop device and roughly ten
+# gigabytes of scratch space, and takes fifteen to twenty-five minutes - none of
+# which belongs between a contributor and a green tick on a one-line change.
+#
+# Run it by hand when the image itself changes (the live-build wrapper, the GRUB
+# or Plymouth themes, the boot hooks), and on a tag, where the release needs the
+# artefact.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  iso:
+    name: Build the live image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim disk space
+        # A hosted runner arrives with ~14 GB free on /, and live-build wants
+        # most of that for the chroot, the package cache and the squashfs. The
+        # preinstalled toolchains are not needed here and buy back ~25 GB.
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          echo "after:"; df -h / | tail -1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install live-build and friends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            live-build debootstrap squashfs-tools xorriso isolinux \
+            syslinux-common dosfstools mtools parted fatresize \
+            grub-common grub-pc-bin grub-efi-amd64-bin \
+            librsvg2-bin fonts-inter dpkg-dev
+
+      - name: Build
+        # build-iso.sh requires root: live-build debootstraps a chroot and
+        # bind-mounts /proc, /sys and /dev/pts inside it.
+        run: sudo --preserve-env=PATH python3 build.py iso
+
+      - name: Verify the image contains what it should
+        # An exit code says the build ran, not that it built the right tree.
+        # This mounts the result and greps the installed package.
+        run: |
+          sudo bash tools/verify-iso-contents.sh \
+            build/dist/zeroize-live-bookworm-amd64.iso
+
+      - name: Checksums
+        run: |
+          cd build/dist
+          sha256sum -c ./*.sha256
+          ls -la
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeroize-live-image
+          path: |
+            build/dist/*.iso
+            build/dist/*.img
+            build/dist/*.sha256
+          if-no-files-found: error
+          # Two gigabytes per run; a fortnight is long enough to test one and
+          # short enough not to fill the account's storage quota.
+          retention-days: 14
+          compression-level: 0

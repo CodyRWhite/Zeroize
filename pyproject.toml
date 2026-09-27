@@ -1,0 +1,111 @@
+[project]
+name = "zeroize"
+version = "1.0.0"
+description = "Purge-grade drive erasure with proof, for Linux"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Cody White" }]
+keywords = [
+    "drive-erasure",
+    "data-sanitization",
+    "nist-800-88",
+    "nvme",
+    "secure-erase",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: System :: Recovery Tools",
+    "Topic :: Security",
+]
+dependencies = ["reportlab>=4.0"]
+
+[project.urls]
+Homepage = "https://github.com/CodyRWhite/Zeroize"
+Issues = "https://github.com/CodyRWhite/Zeroize/issues"
+
+[project.scripts]
+zeroize = "zeroize.cli:main"
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+# The selection is deliberately explicit rather than left to ruff's defaults.
+# The defaults change between releases, and a lint set that changes underneath
+# a project turns an unrelated pull request red for reasons its author did not
+# cause.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # import sorting
+    "B",      # bugbear
+    "A",      # builtin shadowing
+    "BLE",    # blind except
+    "C4",     # comprehensions
+    "DTZ",    # naive datetimes - this tool timestamps evidence
+    "PERF",   # obvious performance traps
+    "PIE",
+    "RUF",
+    "S",      # bandit: this runs as root and issues destructive commands
+    "UP",     # pyupgrade
+]
+ignore = [
+    # Long explanatory comments are load-bearing here; several record hardware
+    # behaviour that cost days to establish. Wrapping them to satisfy a line
+    # limit would be a poor trade, and the limit is already generous.
+    "E501",
+    # subprocess is the entire point of zeroize/process.py, the single audited
+    # choke point every external command passes through. S603 is suppressed
+    # there individually.
+    "S404",
+    # Commands are argv lists run without a shell, and deliberately without
+    # absolute paths: nvme, hdparm and sg_sanitize live in different
+    # directories on different distributions.
+    "S607",
+    # Implicit concatenation of adjacent string literals is how the long
+    # operator-facing messages in this codebase are written, and they read
+    # better split across lines than joined.
+    "ISC",
+    # PERF401 wants list.extend or a comprehension wherever a loop appends.
+    # The loops it flags build certificate sections and erase-pass tables, and
+    # each one carries a conditional and a comment explaining a layout or a
+    # hardware decision. Collapsing them into comprehensions would make a
+    # document generator harder to follow to save an allocation nobody will
+    # ever measure.
+    "PERF401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# E402 is NOT disabled per-file here. The GTK interface must call
+# gi.require_version() before importing Gtk, Adw or Gdk, so those imports
+# cannot sit at the top of the file - but each one carries its own
+# "# noqa: E402" saying so at the point it applies. Blanket-disabling the rule
+# for those files would make every one of those comments redundant, and ruff
+# would then flag all forty-odd of them as unused noqa directives.
+#
+# Tests assert on internals and construct deliberately awkward inputs.
+"tests/*.py" = ["S101", "SLF001", "DTZ"]
+# CMTrace log lines are read beside Windows event logs and other CMTrace
+# output, all of which are local time. A UTC offset in the timestamp column
+# would make this tool's log the odd one out in the only context these files
+# are ever read in, so naive local time here is deliberate. The CERTIFICATE,
+# which is evidence rather than a log, is timezone-aware throughout.
+"zeroize/logging_setup.py" = ["DTZ"]
+# Sample output is written to a caller-supplied directory.
+"tools/*.py" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["zeroize"]

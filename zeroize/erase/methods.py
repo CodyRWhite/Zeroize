@@ -25,7 +25,14 @@ instead. The UI surfaces that caution; it does not override the operator.
 
 from __future__ import annotations
 
-from ..models import AtaSecurity, Device, DeviceKind, EraseMethod, MethodAvailability, NvmeCapabilities
+from ..models import (
+    AtaSecurity,
+    Device,
+    DeviceKind,
+    EraseMethod,
+    MethodAvailability,
+    NvmeCapabilities,
+)
 
 # Method families, used by the engine to pick an implementation.
 FAMILY_NVME_FORMAT = "nvme_format"

@@ -17,15 +17,15 @@ import shutil
 from pathlib import Path
 
 from ..config import Settings
+from ..discovery.volumes import find_writable_volume
 from ..logging_setup import current_log_path, get_logger
 from ..models import RunSummary
-from ..discovery.volumes import find_writable_volume
 from ..paths import certificate_dir, hand_back_to_invoking_user
 from .naming import certificate_filename, certificate_id
 
 _log = get_logger("Certificate")
 
-__all__ = ["issue_certificate", "certificate_id", "certificate_filename"]
+__all__ = ["certificate_filename", "certificate_id", "issue_certificate"]
 
 
 def issue_certificate(

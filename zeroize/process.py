@@ -67,7 +67,7 @@ _READ_ONLY_SUBCOMMANDS = frozenset(
 class CommandError(RuntimeError):
     """Raised by :func:`run_checked` when a command fails or is missing."""
 
-    def __init__(self, result: "CommandResult") -> None:
+    def __init__(self, result: CommandResult) -> None:
         self.result = result
         super().__init__(result.failure_summary)
 
@@ -236,7 +236,7 @@ def run_checked(argv: list[str], **kwargs) -> CommandResult:
 def run_with_heartbeat(
     argv: list[str],
     *,
-    heartbeat: "Callable[[float], bool]",
+    heartbeat: Callable[[float], bool],
     interval: float = 1.0,
     timeout: float | None = None,
     input_text: str | None = None,

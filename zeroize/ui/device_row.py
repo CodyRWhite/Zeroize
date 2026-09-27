@@ -18,6 +18,7 @@ it understands immediately.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import ClassVar
 
 import gi
 
@@ -47,7 +48,7 @@ _ICON_FOR_KIND = {
 class DeviceRow(Gtk.ListBoxRow):
     """A selectable drive, with its layout and its method chooser."""
 
-    __gsignals__ = {
+    __gsignals__: ClassVar[dict] = {
         # Emitted when the check box or the method chooser changes, so the
         # window can update the header count and the Erase button.
         "selection-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),

@@ -37,11 +37,11 @@ __app_id__ = "io.zeroize.Zeroize"
 __publisher__ = "Zeroize"
 
 __all__ = [
+    "__app_id__",
     "__app_name__",
+    "__publisher__",
     "__short_name__",
+    "__slug__",
     "__tagline__",
     "__version__",
-    "__slug__",
-    "__app_id__",
-    "__publisher__",
 ]

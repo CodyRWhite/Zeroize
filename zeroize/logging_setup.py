@@ -73,7 +73,7 @@ class CMTraceFormatter(logging.Formatter):
         """Keep a message from breaking the CMTrace record delimiters."""
         return text.replace("]LOG]!>", "]LOG]! >")
 
-    def format(self, record: logging.LogRecord) -> str:  # noqa: A003
+    def format(self, record: logging.LogRecord) -> str:
         now = datetime.fromtimestamp(record.created).astimezone()
         offset = now.utcoffset() or timedelta(0)
         bias = int(offset.total_seconds() // 60)
@@ -94,7 +94,7 @@ class CMTraceFormatter(logging.Formatter):
 class ConsoleFormatter(logging.Formatter):
     """Human-readable console line: ``14:23:45 INFO  Nvme: formatting ...``."""
 
-    def format(self, record: logging.LogRecord) -> str:  # noqa: A003
+    def format(self, record: logging.LogRecord) -> str:
         stamp = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
         component = CMTraceFormatter._component(record.name)
         message = record.getMessage()
@@ -132,7 +132,7 @@ def _write_session_header(logger: logging.Logger, log_path: Path) -> None:
     """Write a Start-Transcript-style banner at the top of every session."""
     try:
         login_name = getpass.getuser()
-    except Exception:  # pragma: no cover - getuser can fail with no passwd entry
+    except Exception:  # noqa: BLE001 - getuser raises anything on a host with no passwd entry
         login_name = "unknown"
 
     # os.getuid/geteuid are Unix-only. Zeroize only runs on Linux, but the
