@@ -1,0 +1,128 @@
+# Zeroize Plymouth boot splash.
+#
+# Three elements, stacked and centred: the mark, the wordmark beneath it, and a
+# pinwheel beneath that. Everything is composited from pre-rendered PNGs rather
+# than drawn or typeset here - Plymouth's Image.Text uses whatever font the
+# initramfs happens to carry, at whatever size it picks, with no control over
+# tracking, so a wordmark built that way would not match the GRUB screen shown
+# two seconds earlier. The PNGs come from zeroize.branding, which is the same
+# source the GRUB splash and the application icon are generated from.
+#
+# Installed by build-iso.sh from packaging/iso/plymouth/. It is kept as a real
+# file rather than written from a heredoc inside that script: a heredoc nested
+# in a heredoc is one escaping layer too many, and this file's arithmetic is
+# not worth losing to it.
+
+Window.SetBackgroundTopColor(0.086, 0.094, 0.114);
+Window.SetBackgroundBottomColor(0.086, 0.094, 0.114);
+
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+
+# The stack is positioned as a whole and centred on the upper-middle of the
+# screen rather than the exact centre. Boot messages and the password prompt
+# come in along the bottom, and a centred stack leaves them crowding it.
+stack_centre_y = screen_height * 0.42;
+
+# --- Mark -----------------------------------------------------------------
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.x = screen_width / 2 - logo.image.GetWidth() / 2;
+logo.y = stack_centre_y - logo.image.GetHeight() / 2;
+logo.sprite.SetX(logo.x);
+logo.sprite.SetY(logo.y);
+logo.sprite.SetZ(1);
+
+# --- Wordmark -------------------------------------------------------------
+# Optional: if the render failed at build time the splash is still correct,
+# just wordless. Plymouth returns a null image for a missing file, and asking
+# a null image for its width aborts the script - so it is tested first.
+wordmark.image = Image("wordmark.png");
+if (wordmark.image) {
+    wordmark.sprite = Sprite(wordmark.image);
+    wordmark.sprite.SetX(screen_width / 2 - wordmark.image.GetWidth() / 2);
+    wordmark.sprite.SetY(logo.y + logo.image.GetHeight() + screen_height * 0.03);
+    wordmark.sprite.SetZ(1);
+    wordmark.bottom = logo.y + logo.image.GetHeight()
+                      + screen_height * 0.03 + wordmark.image.GetHeight();
+} else {
+    wordmark.bottom = logo.y + logo.image.GetHeight();
+}
+
+# --- Pinwheel -------------------------------------------------------------
+# The spinner PNG carries twelve spokes on an opacity ramp. Rotating it by
+# exactly one spoke per step lands the ramp on the next spoke's geometry, so
+# the wheel appears to turn continuously with no visible seam. SPOKES here and
+# the spoke count in zeroize.branding.spinner_svg are the same number for that
+# reason - changing one alone brings the seam back.
+SPOKES = 12;
+STEP_FRAMES = 4;
+
+spinner.image = Image("spinner.png");
+if (spinner.image) {
+    spinner.centre_x = screen_width / 2;
+    spinner.centre_y = wordmark.bottom + screen_height * 0.075;
+    spinner.sprite = Sprite(spinner.image);
+    spinner.sprite.SetZ(1);
+
+    # Every rotation is rendered once, up front. Rotating inside the refresh
+    # callback re-samples the bitmap sixty times a second on a CPU that is
+    # simultaneously decompressing the root filesystem, which shows up as a
+    # spinner that stutters exactly when boot is busiest.
+    for (index = 0; index < SPOKES; index++) {
+        spinner.frames[index] = spinner.image.Rotate(index * 2 * Math.Pi / SPOKES);
+    }
+}
+
+progress = 0;
+fun RefreshCallback() {
+    progress++;
+    if (spinner.image) {
+        frame = Math.Int(progress / STEP_FRAMES) % SPOKES;
+        spinner.sprite.SetImage(spinner.frames[frame]);
+        # Re-centred every frame: a rotated bitmap is a different size to the
+        # one it came from, so a fixed top-left would make the wheel wobble.
+        spinner.sprite.SetX(spinner.centre_x - spinner.frames[frame].GetWidth() / 2);
+        spinner.sprite.SetY(spinner.centre_y - spinner.frames[frame].GetHeight() / 2);
+    }
+}
+Plymouth.SetRefreshFunction(RefreshCallback);
+
+# --- Messages -------------------------------------------------------------
+message.sprite = Sprite();
+fun MessageCallback(text) {
+    message.image = Image.Text(text, 0.48, 0.53, 0.58);
+    message.sprite.SetImage(message.image);
+    message.sprite.SetX(screen_width / 2 - message.image.GetWidth() / 2);
+    message.sprite.SetY(screen_height - screen_height * 0.08);
+}
+Plymouth.SetMessageFunction(MessageCallback);
+
+# --- Password prompt ------------------------------------------------------
+# The live account has no password, so this should never be reached. It is
+# here because a Plymouth theme with no password callback shows nothing at all
+# when something does ask - a black screen that looks like a hang.
+prompt.sprite = Sprite();
+bullets.sprite = Sprite();
+fun DisplayPasswordCallback(prompt_text, bullet_count) {
+    prompt.image = Image.Text(prompt_text, 0.92, 0.93, 0.95);
+    prompt.sprite.SetImage(prompt.image);
+    prompt.sprite.SetX(screen_width / 2 - prompt.image.GetWidth() / 2);
+    prompt.sprite.SetY(screen_height * 0.72);
+
+    bullet_string = "";
+    for (index = 0; index < bullet_count; index++) {
+        bullet_string += "*";
+    }
+    bullets.image = Image.Text(bullet_string, 1.0, 0.42, 0.10);
+    bullets.sprite.SetImage(bullets.image);
+    bullets.sprite.SetX(screen_width / 2 - bullets.image.GetWidth() / 2);
+    bullets.sprite.SetY(screen_height * 0.76);
+}
+Plymouth.SetDisplayPasswordFunction(DisplayPasswordCallback);
+
+fun DisplayNormalCallback() {
+    prompt.sprite.SetImage(Image.Text(""));
+    bullets.sprite.SetImage(Image.Text(""));
+}
+Plymouth.SetDisplayNormalFunction(DisplayNormalCallback);

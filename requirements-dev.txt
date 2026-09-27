@@ -1,0 +1,6 @@
+-r requirements.txt
+
+pytest>=8.0
+ruff>=0.5
+# Renders built PDFs to images so certificate layout changes can be reviewed.
+pymupdf>=1.24

@@ -1,0 +1,12 @@
+# Runtime dependencies.
+#
+# On a packaged install these come from the distribution's own archive - the
+# .deb and .rpm declare them, and nothing is vendored. This file exists for
+# development in a virtual environment, and for the certificate tooling, which
+# runs on any platform.
+#
+# PyGObject is deliberately absent: it is not reliably pip-installable and
+# every target distribution ships it (python3-gi / python3-gobject) along with
+# the GTK 4 and libadwaita typelibs the interface needs.
+
+reportlab>=4.0

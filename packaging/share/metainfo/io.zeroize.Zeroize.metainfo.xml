@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.zeroize.Zeroize</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Zeroize Drive Wiper</name>
+  <summary>Purge-grade drive erasure with proof</summary>
+
+  <description>
+    <p>
+      Zeroize erases attached drives to a purge-grade standard and issues a PDF
+      certificate recording what was destroyed, how, and on which machine.
+    </p>
+    <p>
+      It reads each drive's own capability registers and offers only the erase
+      methods that drive will actually accept - NVMe Sanitize and Format NVM
+      where the controller supports them, ATA Secure Erase for SATA drives that
+      are not frozen, SCSI Sanitize for SAS, and multi-pass software overwrite
+      as a universal fallback. Methods a drive cannot use are shown greyed out
+      with the reason, rather than hidden.
+    </p>
+    <p>
+      The drive carrying the running system, and the live medium Zeroize itself
+      booted from, are detected and can never be selected.
+    </p>
+    <p>Erase methods:</p>
+    <ul>
+      <li>NVMe Sanitize - crypto erase, block erase and overwrite</li>
+      <li>NVMe Format NVM - cryptographic erase (SES=2) and user data erase (SES=1)</li>
+      <li>ATA Secure Erase, standard and enhanced</li>
+      <li>SCSI Sanitize - crypto and block erase</li>
+      <li>Overwrite - single pass, DoD 5220.22-M (3 and 7 pass), HMG IS5, VSITR, Gutmann</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.zeroize.Zeroize.desktop</launchable>
+
+  <categories>
+    <category>System</category>
+    <category>Security</category>
+    <category>Utility</category>
+  </categories>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0" date="2026-09-26">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

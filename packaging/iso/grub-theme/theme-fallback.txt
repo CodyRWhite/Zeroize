@@ -1,0 +1,71 @@
+# Zeroize GRUB theme - fallback variant
+#
+# Identical to theme.txt except that it names no font anywhere, so GRUB uses
+# whichever face it already loaded (unicode.pf2, loaded by config.cfg before
+# this is reached).
+#
+# This exists because a GRUB theme that references a font GRUB has not loaded
+# is discarded WHOLE, with no diagnostic of any kind: the menu simply appears
+# as plain text on black, which looks exactly like a theme that was never
+# configured. Staking the entire branded menu on a custom font loading turned
+# out to be a bad bet - the fonts are cross-compiled from a host running a
+# newer GRUB than the image, and a PF2 the bootloader will not read is
+# indistinguishable, from the build side, from one it will.
+#
+# So the branding degrades instead of vanishing. The background, the layout,
+# the spacing and the colours all survive here; only the typeface is lost.
+#
+# Sizes are omitted along with the font names: an item_height tuned for 22px
+# Inter is wrong for 16px Unifont, and GRUB sizes rows from the font when it
+# is not told otherwise.
+
+title-text: ""
+desktop-image: "background.png"
+desktop-color: "#16181D"
+
+# Full-screen for the same reason as the main theme: see its header.
+terminal-left: "0"
+terminal-top: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
+
++ boot_menu {
+    left = 14%
+    top = 56%
+    width = 72%
+    height = 30%
+
+    item_color = "#9BA6B2"
+    selected_item_color = "#FF6B1A"
+
+    item_spacing = 10
+    item_padding = 0
+    item_icon_space = 0
+    icon_width = 0
+    icon_height = 0
+
+    scrollbar = false
+}
+
++ progress_bar {
+    id = "__timeout__"
+    left = 14%
+    top = 90%
+    width = 72%
+    height = 2
+
+    show_text = false
+    bg_color = "#242832"
+    fg_color = "#FF6B1A"
+    border_color = "#242832"
+}
+
++ label {
+    left = 14%
+    top = 92%
+    width = 72%
+    align = "left"
+    color = "#6B7684"
+    text = "Enter to boot     E to edit     C for a command line"
+}

@@ -1,0 +1,168 @@
+#!/bin/sh
+# Boot menu presentation, applied to live-build's generated output.
+#
+# live-build writes a menu titled "Live system (amd64)" at 800x600 with
+# Debian's theme. This renames the entries, raises the resolution, loads real
+# fonts and points GRUB at the Zeroize theme staged alongside it.
+#
+# THE ORDERING IS THE WHOLE TRICK. live-build's grub.cfg is four lines of
+# preamble followed by a `source /boot/grub/config.cfg`, and that file:
+#
+#   * sets gfxmode back to 800x600, unconditionally, and
+#   * sources theme.cfg, which sets theme to /boot/grub/live-theme/theme.txt
+#
+# So anything written above that source line is overwritten a moment later.
+# The first version of this hook patched the top of grub.cfg and looked
+# completely correct in the file, while the booted menu stayed 800x600 with
+# Debian's theme - there is no error, GRUB just uses the last value set. The
+# settings therefore go into config.cfg and theme.cfg themselves, which are
+# the files that actually get the last word.
+#
+# The second half of that failure is worth recording too: a theme naming a
+# font that was never loaded does not report anything. GRUB abandons the theme
+# and silently falls back to its legacy text menu, which still shows the
+# background image - so it looks like the theme half-worked rather than like
+# it failed. If the menu ever reverts to monospaced text, suspect the font
+# name before anything else.
+#
+# This file is installed by build-iso.sh rather than written from a heredoc
+# inside it. It is dense with backslashes, and a heredoc nested in a heredoc
+# is one escaping layer too many - an earlier revision silently turned a sed
+# backreference into a 0x01 byte, which sed then wrote into grub.cfg.
+#
+# Every step is best-effort. A plain boot menu still boots; a boot menu broken
+# by a hook that assumed a file existed does not.
+set -e
+
+PRODUCT="Zeroize Drive Wiper Live Boot"
+
+# A list, not a single mode: GRUB walks it and takes the first the firmware
+# actually reports, so a panel that cannot do 1080p still gets something better
+# than 800x600 instead of dropping to a text console.
+MODES="1920x1080,1600x900,1366x768,1280x1024,1024x768,auto"
+
+# Binary hooks normally run inside the binary tree; tolerate the build root.
+ROOT=""
+for CANDIDATE in . binary; do
+    if [ -d "$CANDIDATE/boot/grub" ] || [ -d "$CANDIDATE/isolinux" ]; then
+        ROOT="$CANDIDATE"
+        break
+    fi
+done
+if [ -z "$ROOT" ]; then
+    echo "WARNING: no boot tree found; the boot menu was left as generated." >&2
+    exit 0
+fi
+
+GRUB_DIR="$ROOT/boot/grub"
+GRUB_CFG="$GRUB_DIR/grub.cfg"
+CONFIG_CFG="$GRUB_DIR/config.cfg"
+THEME_CFG="$GRUB_DIR/theme.cfg"
+THEME="$GRUB_DIR/zeroize/theme.txt"
+
+# --- Resolution -----------------------------------------------------------
+# config.cfg is the file that gets the last word, so it is the one patched.
+# The whole line is rewritten rather than captured and rebuilt: a backreference
+# here buys nothing and is the exact construct that got mangled before.
+for TARGET in "$CONFIG_CFG" "$GRUB_CFG"; do
+    [ -f "$TARGET" ] || continue
+    sed -i "s|^ *set gfxmode=.*|set gfxmode=$MODES|" "$TARGET"
+done
+
+if [ -f "$GRUB_CFG" ] && ! grep -q "set gfxmode=" "$GRUB_CFG"; then
+    sed -i "1i set gfxmode=$MODES" "$GRUB_CFG"
+fi
+
+# gfxpayload=keep hands the mode straight to the kernel, so the handover to
+# Plymouth does not flick back through a low-resolution text console.
+for TARGET in "$CONFIG_CFG" "$GRUB_CFG"; do
+    [ -f "$TARGET" ] || continue
+    grep -q "set gfxpayload=keep" "$TARGET" || \
+        sed -i "/set gfxmode=/a set gfxpayload=keep" "$TARGET"
+done
+
+# --- Fonts and theme ------------------------------------------------------
+# Only enabled when the fonts are actually present. A theme referencing a font
+# that was never loaded is worse than no theme: GRUB drops to the legacy menu
+# with no diagnostic at all.
+FONT_MENU="$GRUB_DIR/zeroize/fonts/menu.pf2"
+FONT_HINT="$GRUB_DIR/zeroize/fonts/hint.pf2"
+
+# Prefer fonts built inside the chroot over the ones staged from the build
+# host. The host runs a newer Debian than the image, and its grub-mkfont emits
+# PF2 files the image's older GRUB may refuse to load - silently, by
+# abandoning the theme and drawing a plain text menu. The chroot's grub-mkfont
+# is the same release as the bootloader that has to read them.
+for CHROOT_DIR in ../chroot chroot; do
+    CHROOT_FONTS="$CHROOT_DIR/usr/share/zeroize/grub-fonts"
+    if [ -s "$CHROOT_FONTS/menu.pf2" ] && [ -s "$CHROOT_FONTS/hint.pf2" ]; then
+        mkdir -p "$GRUB_DIR/zeroize/fonts"
+        cp -f "$CHROOT_FONTS/menu.pf2" "$FONT_MENU"
+        cp -f "$CHROOT_FONTS/hint.pf2" "$FONT_HINT"
+        echo "Boot menu: using fonts built inside the chroot"
+        break
+    fi
+done
+
+if [ -f "$THEME" ] && [ -s "$FONT_MENU" ] && [ -s "$FONT_HINT" ]; then
+    if [ -f "$GRUB_DIR/splash.png" ]; then
+        cp "$GRUB_DIR/splash.png" "$GRUB_DIR/zeroize/background.png"
+    fi
+
+    # theme.cfg is sourced by config.cfg and sets the theme last, so its
+    # assignment is replaced outright rather than appended to.
+    if [ -f "$THEME_CFG" ]; then
+        cat > "$THEME_CFG" <<'THEMECFG'
+# Replaced by the Zeroize boot-menu hook. The original set a theme from
+# live-build's live-theme directory; it is replaced rather than appended to,
+# because whichever assignment runs last is the one GRUB uses.
+set color_normal=light-gray/black
+set color_highlight=white/black
+
+# Two themes, differing only in the fonts they name.
+#
+# A GRUB theme that references a font GRUB has not loaded is discarded whole,
+# with no diagnostic - the boot menu just appears as plain text on black, which
+# is indistinguishable from the theme never having been configured. Rather than
+# stake the entire branded menu on the custom fonts loading, the fallback theme
+# names no font at all and uses whatever face GRUB already has. The background,
+# the layout and the colours survive either way.
+if loadfont $prefix/zeroize/fonts/menu.pf2 ; then
+    loadfont $prefix/zeroize/fonts/hint.pf2
+    set theme=$prefix/zeroize/theme.txt
+else
+    set theme=$prefix/zeroize/theme-fallback.txt
+fi
+THEMECFG
+        echo "Boot menu: Zeroize theme and Inter fonts enabled"
+    fi
+else
+    echo "Boot menu: fonts or theme missing - keeping the default menu" >&2
+fi
+
+# --- Entry names ----------------------------------------------------------
+# live-build has spelled this "Live system" and "Live System" across releases.
+# The fail-safe entry is renamed before the plain one: the shorter pattern
+# matches the longer string's prefix, so the other order collapses both
+# entries into the same title.
+retitle() {
+    target="$1"
+    [ -f "$target" ] || return 0
+    sed -i \
+        -e "s/Live system (amd64 fail-safe mode)/$PRODUCT (amd64 fail-safe mode)/g" \
+        -e "s/Live System (amd64 fail-safe mode)/$PRODUCT (amd64 fail-safe mode)/g" \
+        -e "s/Live system (amd64)/$PRODUCT (amd64)/g" \
+        -e "s/Live System (amd64)/$PRODUCT (amd64)/g" \
+        -e "s/Live system/$PRODUCT/g" \
+        -e "s/Live System/$PRODUCT/g" \
+        -e "s/Debian GNU\/Linux/Zeroize Drive Wiper/g" \
+        "$target"
+}
+
+retitle "$GRUB_CFG"
+for CFG in "$GRUB_DIR"/*.cfg "$ROOT"/isolinux/*.cfg; do
+    [ -f "$CFG" ] || continue
+    [ "$CFG" = "$GRUB_CFG" ] || retitle "$CFG"
+done
+
+echo "Boot menu: entries retitled to \"$PRODUCT\", gfxmode $MODES"

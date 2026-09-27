@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Zeroize Drive Wiper
+GenericName=Drive Eraser
+Comment=Erase drives to a purge-grade standard and issue a certificate
+Keywords=wipe;erase;sanitise;sanitize;nvme;ssd;disk;drive;secure;shred;certificate;
+Exec=pkexec /usr/bin/zeroize
+TryExec=/usr/bin/zeroize
+Icon=io.zeroize.Zeroize
+Terminal=false
+Categories=System;Security;Utility;
+StartupNotify=true
+X-GNOME-UsesNotifications=false

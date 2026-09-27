@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
+<policyconfig>
+
+  <vendor>Zeroize</vendor>
+  <vendor_url>https://github.com/zeroize/zeroize</vendor_url>
+  <icon_name>io.zeroize.Zeroize</icon_name>
+
+  <!--
+    Zeroize issues destructive commands directly to block devices, which needs
+    root. Rather than making the binary setuid, the desktop entry launches it
+    through pkexec against this action, so the escalation is auditable, is
+    subject to the site's polkit rules, and prompts the operator every time.
+
+    auth_admin_keep rather than auth_admin: a bench session commonly erases
+    several batches of drives in a row, and re-authenticating for each would
+    push operators towards running a root shell instead - which is both less
+    auditable and less safe than this.
+  -->
+  <action id="io.zeroize.Zeroize.run">
+    <description>Run Zeroize Drive Wiper</description>
+    <description xml:lang="en_GB">Run Zeroize Drive Wiper</description>
+    <message>Authentication is required to erase drives. This destroys all data on the drives you select.</message>
+    <message xml:lang="en_GB">Authentication is required to erase drives. This destroys all data on the drives you select.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/zeroize</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+
+</policyconfig>

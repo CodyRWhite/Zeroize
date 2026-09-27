@@ -1,0 +1,21 @@
+#!/usr/bin/python3
+"""Launcher for Zeroize Drive Wiper.
+
+The application is installed as a plain package tree under /usr/lib/zeroize
+rather than into a Python site-packages directory. That directory differs
+between the target distributions - Debian and Ubuntu use
+/usr/lib/python3/dist-packages, Fedora and RHEL use
+/usr/lib/python3.N/site-packages, openSUSE something else again - and pinning
+to any one of them would make the package non-portable or tie it to a specific
+Python minor version. A fixed path plus this two-line launcher works
+identically everywhere.
+"""
+
+import sys
+
+sys.path.insert(0, "/usr/lib/zeroize")
+
+from zeroize.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

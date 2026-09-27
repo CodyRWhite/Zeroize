@@ -1,0 +1,87 @@
+# Zeroize GRUB theme
+#
+# The background carries the branding - mark, wordmark and tagline, rendered at
+# 1920x1080 by zeroize.branding.splash_svg - so this file adds no artwork of
+# its own. Its job is to keep the menu clear of the artwork and make the
+# selected entry unmistakable.
+#
+# FONT NAMES MUST MATCH EXACTLY. grub-mkfont does not store the name passed to
+# -n; it appends the style and size, so "-n Zeroize Menu -s 22" is stored, and
+# must be referenced, as "Zeroize Menu Regular 22". A theme that names a font
+# GRUB has not loaded is not reported as an error - GRUB abandons the theme and
+# falls back to its legacy text menu, still showing the background image, so it
+# looks like the theme partly worked rather than like it failed. If the menu
+# ever comes back monospaced, check this string first.
+#
+# No pixmaps are referenced, for the same reason: a theme naming a missing
+# pixmap fails the same silent way.
+#
+# Colours are the brand palette: CHARCOAL ground, MIST text, ORANGE selection.
+
+title-text: ""
+desktop-image: "background.png"
+desktop-color: "#16181D"
+# The terminal region is where GRUB prints once a menu entry is chosen, and
+# it is drawn over the theme for the second or two before Plymouth takes over.
+# It cannot be hidden: GRUB needs somewhere to report a failure, and its
+# console background is one of sixteen fixed colours - black - with no way to
+# match the brand charcoal without supplying pixmaps.
+#
+# So it covers the whole screen instead of floating in the middle. An inset
+# rectangle appearing over the artwork looks like a glitch; a full-screen fade
+# to black reads as the handover it actually is.
+terminal-font: "Zeroize Menu Regular 22"
+terminal-left: "0"
+terminal-top: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
+
++ boot_menu {
+    left = 14%
+    top = 56%
+    width = 72%
+    height = 30%
+
+    item_font = "Zeroize Menu Regular 22"
+    item_color = "#9BA6B2"
+    selected_item_color = "#FF6B1A"
+
+    # Generous height and spacing: this menu is read at arm's length on a
+    # bench, often by someone who has just walked up to the machine. The
+    # unselected colour is deliberately dimmer than the brand's MIST so the
+    # selected entry reads as the only live thing on the screen.
+    item_height = 40
+    item_spacing = 10
+    item_padding = 0
+    item_icon_space = 0
+    icon_width = 0
+    icon_height = 0
+
+    scrollbar = false
+}
+
+# Timeout indicator: a thin rule rather than a boxed bar, so it reads as part
+# of the layout instead of a widget dropped on top of it.
++ progress_bar {
+    id = "__timeout__"
+    left = 14%
+    top = 90%
+    width = 72%
+    height = 2
+
+    show_text = false
+    bg_color = "#242832"
+    fg_color = "#FF6B1A"
+    border_color = "#242832"
+}
+
++ label {
+    left = 14%
+    top = 92%
+    width = 72%
+    align = "left"
+    color = "#6B7684"
+    font = "Zeroize Hint Regular 16"
+    text = "Enter to boot     E to edit     C for a command line"
+}
