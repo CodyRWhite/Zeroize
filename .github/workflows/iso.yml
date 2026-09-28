@@ -1,8 +1,8 @@
 name: Live ISO
 
-# Kept out of CI on purpose. This job needs root, a loop device and roughly ten
-# gigabytes of scratch space, and takes fifteen to twenty-five minutes - none of
-# which belongs between a contributor and a green tick on a one-line change.
+# Kept out of CI on purpose. This needs root, loop devices and roughly ten
+# gigabytes of scratch, and takes fifteen to twenty-five minutes - none of which
+# belongs between a contributor and a green tick on a one-line change.
 #
 # Run it by hand when the image itself changes (the live-build wrapper, the GRUB
 # or Plymouth themes, the boot hooks), and on a tag, where the release needs the
@@ -38,36 +38,44 @@ jobs:
           sudo apt-get clean
           echo "after:"; df -h / | tail -1
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install live-build and friends
+      - name: Build inside a Debian 12 container
+        # NOT on the runner directly. Ubuntu ships a fork of live-build that
+        # diverged from Debian's years ago and does not accept --uefi-secure-boot
+        # or --image-name, so `lb config` fails and the build dies about a minute
+        # in. Both flags are load-bearing here: the first is what makes the image
+        # boot with Secure Boot enabled.
+        #
+        # The image targets Debian 12, so it is built with Debian 12's own
+        # live-build. --privileged is required because live-build mounts /proc,
+        # /sys and loop devices inside the chroot it assembles.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            live-build debootstrap squashfs-tools xorriso isolinux \
-            syslinux-common dosfstools mtools parted fatresize \
-            grub-common grub-pc-bin grub-efi-amd64-bin \
-            librsvg2-bin fonts-inter dpkg-dev
+          docker run --rm --privileged \
+            -v "$PWD":/src -w /src \
+            -e DEBIAN_FRONTEND=noninteractive \
+            debian:12 bash -euc '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends \
+                live-build debootstrap squashfs-tools xorriso isolinux \
+                syslinux-common dosfstools mtools parted fatresize \
+                grub-common grub-pc-bin grub-efi-amd64-bin \
+                librsvg2-bin fonts-inter dpkg-dev python3 ca-certificates
 
-      - name: Build
-        # build-iso.sh requires root: live-build debootstraps a chroot and
-        # bind-mounts /proc, /sys and /dev/pts inside it.
-        run: sudo --preserve-env=PATH python3 build.py iso
+              python3 build.py iso
 
-      - name: Verify the image contains what it should
-        # An exit code says the build ran, not that it built the right tree.
-        # This mounts the result and greps the installed package.
+              # An exit code says the build ran, not that it built the right
+              # tree. This mounts the result and reads the installed package
+              # back out of the squashfs.
+              bash tools/verify-iso-contents.sh \
+                build/dist/zeroize-live-bookworm-amd64.iso
+
+              cd build/dist && sha256sum -c ./*.sha256
+            '
+
+      - name: Hand the artefacts back to the runner
+        # The container builds as root, so everything it wrote is root-owned.
         run: |
-          sudo bash tools/verify-iso-contents.sh \
-            build/dist/zeroize-live-bookworm-amd64.iso
-
-      - name: Checksums
-        run: |
-          cd build/dist
-          sha256sum -c ./*.sha256
-          ls -la
+          sudo chown -R "$USER:$USER" build/dist
+          ls -la build/dist
 
       - name: Upload
         uses: actions/upload-artifact@v4
