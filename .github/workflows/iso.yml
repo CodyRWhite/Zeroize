@@ -54,11 +54,20 @@ jobs:
             -e DEBIAN_FRONTEND=noninteractive \
             debian:12 bash -euc '
               apt-get update -qq
-              apt-get install -y --no-install-recommends \
+
+              # NOT --no-install-recommends. live-build Recommends apt-utils,
+              # bzip2, cpio, cryptsetup, file, rsync, systemd-container, wget
+              # and xz-utils, and its own stages shell out to several of them.
+              # Stripping recommends produced a bare exit 127 with no output at
+              # all, because the failure happened inside live-build before any
+              # stage had printed anything. This container is discarded at the
+              # end of the job, so there is nothing to gain by trimming it.
+              apt-get install -y \
                 live-build debootstrap squashfs-tools xorriso isolinux \
-                syslinux-common dosfstools mtools parted fatresize \
-                grub-common grub-pc-bin grub-efi-amd64-bin \
-                librsvg2-bin fonts-inter dpkg-dev python3 ca-certificates
+                syslinux-common syslinux-utils dosfstools mtools parted \
+                fatresize grub-common grub-pc-bin grub-efi-amd64-bin \
+                librsvg2-bin fonts-inter dpkg-dev python3 ca-certificates \
+                cpio file rsync xz-utils wget bzip2
 
               python3 build.py iso
 

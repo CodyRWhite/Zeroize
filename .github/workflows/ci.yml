@@ -7,7 +7,25 @@ name: CI
 on:
   push:
     branches: [main]
+    # Documentation, licensing and repository furniture cannot change what the
+    # software does, and a twelve-minute matrix build to prove a typo fix is
+    # still a typo fix is a waste of everyone's attention - including the
+    # reviewer who learns to ignore a red tick.
+    #
+    # .gitattributes is deliberately NOT here. It decides whether shell scripts
+    # check out with CRLF, which the "Refuse carriage returns" job exists to
+    # catch, so a change to it is exactly when that job should run.
+    paths-ignore: &docs
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".github/FUNDING.yml"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE*"
+      - ".github/CODEOWNERS"
   pull_request:
+    paths-ignore: *docs
   workflow_dispatch:
 
 permissions:
