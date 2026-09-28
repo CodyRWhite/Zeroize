@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: System :: Recovery Tools",
     "Topic :: Security",
 ]
-dependencies = ["reportlab>=4.0"]
+dependencies = ["reportlab>=5.0.1"]
 
 [project.urls]
 Homepage = "https://github.com/CodyRWhite/Zeroize"
