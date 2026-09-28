@@ -19,7 +19,7 @@
 # In a container:
 #   docker run --rm --privileged -v "$PWD":/src -w /src debian:12 \
 #     bash -c 'apt-get update && apt-get install -y live-build xorriso &&
-#              packaging/iso/build-iso.sh build/dist/zeroize_1.0.0_all.deb build/dist'
+#              packaging/iso/build-iso.sh build/dist/zeroize_1.0.1_all.deb build/dist'
 #
 # --privileged is needed because live-build mounts /proc and loop devices
 # inside the chroot it assembles.

@@ -22,7 +22,7 @@ from __future__ import annotations
 __app_name__ = "Zeroize Drive Wiper"
 __short_name__ = "Zeroize"
 __tagline__ = "Purge-grade drive erasure"
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 #: Short machine-readable identifier - binary name, log directory, polkit
 #: action suffix, and the package name in both the .deb and the .rpm.
@@ -36,9 +36,17 @@ __app_id__ = "io.zeroize.Zeroize"
 #: the operating organisation - see the module docstring.
 __publisher__ = "Zeroize"
 
+#: Where the tool came from. Printed on the certificate so a reader who was not
+#: present at the erase can find the source, read what the method actually did,
+#: and check the release hashes against the version that signed their document.
+#: A certificate that cannot be traced back to a specific build is an assertion
+#: rather than evidence.
+__project_url__ = "github.com/CodyRWhite/Zeroize"
+
 __all__ = [
     "__app_id__",
     "__app_name__",
+    "__project_url__",
     "__publisher__",
     "__short_name__",
     "__slug__",

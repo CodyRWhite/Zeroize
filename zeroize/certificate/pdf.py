@@ -51,7 +51,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from .. import __app_name__, __short_name__, __tagline__, __version__
+from .. import __app_name__, __project_url__, __short_name__, __version__
 from ..branding import (
     AMBER,
     CHARCOAL,
@@ -520,7 +520,7 @@ def _draw_page_furniture(canvas, document, *, identifier: str) -> None:
     canvas.drawString(
         _MARGIN_X,
         _FOOTER_HEIGHT - 13,
-        f"Produced by {__app_name__} v{__version__}. {__tagline__}.",
+        f"Produced by {__app_name__} v{__version__}  -  {__project_url__}",
     )
     canvas.drawRightString(
         PAGE_WIDTH - _MARGIN_X,
@@ -1029,7 +1029,7 @@ def render_certificate(
             f"{sum(1 for item in summary.results if item.succeeded)} of "
             f"{len(summary.results)} drive(s) sanitised on {summary.machine}"
         ),
-        creator=f"{__app_name__} {__version__}",
+        creator=f"{__app_name__} {__version__} ({__project_url__})",
         leftMargin=_MARGIN_X,
         rightMargin=_MARGIN_X,
         topMargin=_HEADER_BAND_HEIGHT + _CONTENT_TOP_GAP,

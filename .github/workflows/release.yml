@@ -1,8 +1,13 @@
 name: Release
 
-# Tag a version and this publishes it. The ISO is built by the Live ISO
-# workflow, which the same tag triggers; this job waits for that artefact
-# rather than building the image twice.
+# Tag a version and this publishes it.
+#
+# The live image is built by a job in THIS workflow, not by a separate one
+# triggered by the same tag. That was the original arrangement and it did not
+# work: both fired together, the packages finished in two minutes, the publish
+# step went looking for an ISO that was still twenty minutes from existing, and
+# the release went out without the image. A release cannot race its own
+# artefacts - so the image is a dependency of publishing, and publishing waits.
 on:
   push:
     tags: ["v*"]
@@ -24,12 +29,13 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dpkg-dev rpm librsvg2-bin fonts-inter
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev rpm librsvg2-bin fonts-inter
 
       - name: Check the tag matches the version in the source
         # A release whose artefacts disagree with its tag is worse than no
-        # release: the .deb installs as one version and the tag claims another,
-        # and nothing downstream can tell which is right.
+        # release: the .deb installs as one version while the tag claims
+        # another, and nothing downstream can tell which is right.
         run: |
           source_version=$(python3 -c "import zeroize; print(zeroize.__version__)")
           tag_version="${GITHUB_REF_NAME#v}"
@@ -57,10 +63,20 @@ jobs:
           path: build/dist/*
           if-no-files-found: error
 
+  image:
+    name: Live image
+    # The same build the Live ISO workflow runs by hand. Calling it here means
+    # the release has the image before it publishes, rather than hoping.
+    uses: ./.github/workflows/iso-build.yml
+
   publish:
     name: Publish the release
     runs-on: ubuntu-latest
-    needs: [packages]
+    # Both, and publishing does not start until each has succeeded. If the
+    # image fails, no release is published at all - which is the right outcome:
+    # the .img is the artefact most people actually want, and a release missing
+    # it is worse than one that arrives late.
+    needs: [packages, image]
     steps:
       - uses: actions/checkout@v4
 
@@ -70,25 +86,40 @@ jobs:
           name: release-packages
           path: artifacts
 
-      - name: Wait for the live image
-        # The Live ISO workflow runs on the same tag. Poll for its artefact
-        # rather than rebuilding a two-gigabyte image a second time.
-        id: image
+      - name: Collect the live image
         uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: zeroize-live-image
           path: artifacts
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.run_id }}
 
-      - name: Note a missing image
-        if: steps.image.outcome != 'success'
+      - name: Refuse to publish an incomplete release
+        # Belt and braces behind `needs`. An artefact can upload successfully
+        # and still be wrong, and the failure mode here is a release people
+        # download expecting a bootable stick.
         run: |
-          echo "::warning::the live image artefact was not available; publishing packages only"
+          ls -la artifacts
+          missing=0
+          for pattern in "*.deb" "*.rpm" "*.iso" "*-usb.img"; do
+            # shellcheck disable=SC2086
+            if ! compgen -G "artifacts/$pattern" >/dev/null; then
+              echo "::error::no file matching $pattern"
+              missing=1
+            fi
+          done
+          exit $missing
+        shell: bash
 
-      - name: List what will be published
-        run: ls -la artifacts
+      - name: Verify the checksums one last time
+        # These were checked in the build container. Checking them again here
+        # proves the files survived two artefact round-trips intact.
+        run: |
+          cd artifacts
+          for sums in *.sha256; do
+            echo "== $sums"
+            sed 's|.*/||' "$sums" > "$sums.local"
+            sha256sum -c "$sums.local"
+            rm -f "$sums.local"
+          done
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -101,7 +132,7 @@ jobs:
 
             **Write `zeroize-live-bookworm-amd64-usb.img` with Rufus in DD Image
             mode**, not ISO mode. The `.img` carries the `ZEROIZE-OUT` partition
-            that certificates are written to; the `.iso` does not.
+            that certificates and logs are written to; the `.iso` does not.
 
             Verify before writing:
 
@@ -112,4 +143,6 @@ jobs:
             > [!IMPORTANT]
             > Non-Windows Secure Boot certificates must be enabled in firmware.
             > The third-party *Microsoft UEFI CA* signs Linux shim; the
-            > similarly named *Windows UEFI CA* signs only Windows.
+            > similarly named *Windows UEFI CA* signs only Windows. A machine
+            > trusting only the latter will refuse to boot this image, and would
+            > equally refuse Ubuntu, Fedora or Clonezilla.

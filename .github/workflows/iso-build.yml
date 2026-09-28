@@ -1,0 +1,102 @@
+name: Build the live image
+
+# The image build itself, as a reusable workflow. It has two callers: Live ISO
+# (run by hand) and Release (run on a tag).
+#
+# It lives here rather than in either of them because a release must not race
+# its own artefacts. The first tagged release did: Release and Live ISO both
+# fired on the same tag, Release finished its packages in two minutes, went
+# looking for an ISO that was still twenty minutes from existing, and published
+# without it. Calling this from Release makes the image a dependency instead of
+# a coincidence.
+on:
+  workflow_call:
+    outputs:
+      artifact:
+        description: Name of the uploaded artefact containing the ISO and USB image
+        value: zeroize-live-image
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the live image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim disk space
+        # A hosted runner arrives with ~14 GB free on /, and live-build wants
+        # most of that for the chroot, the package cache and the squashfs. The
+        # preinstalled toolchains are not needed here and buy back ~25 GB.
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean
+          echo "after:"; df -h / | tail -1
+
+      - name: Build inside a Debian 12 container
+        # NOT on the runner directly. Ubuntu ships a fork of live-build that
+        # diverged from Debian's years ago and does not accept
+        # --uefi-secure-boot or --image-name, so `lb config` fails and the build
+        # dies about a minute in. The first of those is what makes the image
+        # boot with Secure Boot enabled.
+        #
+        # The image targets Debian 12, so it is built with Debian 12's own
+        # live-build. --privileged is required because live-build mounts /proc,
+        # /sys and loop devices inside the chroot it assembles.
+        run: |
+          docker run --rm --privileged \
+            -v "$PWD":/src -w /src \
+            -e DEBIAN_FRONTEND=noninteractive \
+            debian:12 bash -euc '
+              apt-get update -qq
+
+              # NOT --no-install-recommends. live-build Recommends apt-utils,
+              # bzip2, cpio, cryptsetup, file, rsync, systemd-container, wget
+              # and xz-utils, and its own stages shell out to several of them.
+              # Stripping recommends produced a bare exit 127 with no output at
+              # all, because the failure happened inside live-build before any
+              # stage had printed anything. This container is discarded at the
+              # end of the job, so there is nothing to gain by trimming it.
+              apt-get install -y \
+                live-build debootstrap squashfs-tools xorriso isolinux \
+                syslinux-common syslinux-utils dosfstools mtools parted \
+                fatresize grub-common grub-pc-bin grub-efi-amd64-bin \
+                librsvg2-bin fonts-inter dpkg-dev python3 ca-certificates \
+                cpio file rsync xz-utils wget bzip2 \
+                sbsigntool
+
+              python3 build.py iso
+
+              # An exit code says the build ran, not that it built the right
+              # tree. This mounts the result and reads the installed package
+              # back out of the squashfs.
+              bash tools/verify-iso-contents.sh \
+                build/dist/zeroize-live-bookworm-amd64.iso
+
+              cd build/dist && sha256sum -c ./*.sha256
+            '
+
+      - name: Hand the artefacts back to the runner
+        # The container builds as root, so everything it wrote is root-owned.
+        run: |
+          sudo chown -R "$USER:$USER" build/dist
+          ls -la build/dist
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeroize-live-image
+          path: |
+            build/dist/*.iso
+            build/dist/*.img
+            build/dist/*.sha256
+          if-no-files-found: error
+          # Two gigabytes per run; a fortnight is long enough to test one and
+          # short enough not to fill the account's storage quota.
+          retention-days: 14
+          compression-level: 0

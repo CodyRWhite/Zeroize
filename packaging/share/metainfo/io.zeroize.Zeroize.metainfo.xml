@@ -45,6 +45,15 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.1" date="2026-09-28">
+      <description>
+        <p>
+          The certificate now carries the project URL, so a reader who was not
+          present at the erase can trace the document back to the build that
+          produced it.
+        </p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-09-26">
       <description>
         <p>First release.</p>
