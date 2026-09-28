@@ -67,7 +67,8 @@ jobs:
                 syslinux-common syslinux-utils dosfstools mtools parted \
                 fatresize grub-common grub-pc-bin grub-efi-amd64-bin \
                 librsvg2-bin fonts-inter dpkg-dev python3 ca-certificates \
-                cpio file rsync xz-utils wget bzip2
+                cpio file rsync xz-utils wget bzip2 \
+                sbsigntool
 
               python3 build.py iso
 
