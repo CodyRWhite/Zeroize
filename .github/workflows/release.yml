@@ -92,6 +92,50 @@ jobs:
           name: zeroize-live-image
           path: artifacts
 
+      - name: Compress the USB image
+        # GitHub refuses a release asset over 2 GiB:
+        #
+        #   Validation Failed: {"field":"size","message":"size must be less
+        #   than 2147483648"}
+        #
+        # and the raw image is 2.22 GB. Roughly half of it is the empty
+        # ZEROIZE-OUT partition, which is almost entirely zeros: a 256 MiB
+        # sample of it compresses to 3.4 MB, while the same sample of squashfs
+        # comes back very slightly larger, being xz-compressed already. So the
+        # whole image lands near 1.2 GB - under the limit, and half the
+        # download for everyone.
+        #
+        # Compression rather than one of the split-and-reassemble actions,
+        # which serve the parts back through a third-party worker. This image
+        # is written to a stick and booted as root to destroy data; its
+        # provenance is the product, and it should come from the same place as
+        # the checksums that vouch for it.
+        #
+        # -1 on purpose. The compressible half is zeros, which any preset
+        # handles, and the other half will not shrink at any preset - so a
+        # higher one would spend minutes of runner time to save nothing.
+        run: |
+          cd artifacts
+          image=zeroize-live-bookworm-amd64-usb.img
+          before=$(stat -c %s "$image")
+
+          xz --threads=0 -1 --force "$image"
+
+          after=$(stat -c %s "$image.xz")
+          printf 'raw:        %s bytes\n' "$before"
+          printf 'compressed: %s bytes (%d%%)\n' "$after" $(( after * 100 / before ))
+
+          if [ "$after" -ge 2147483648 ]; then
+            echo "::error::compressed image is still over GitHub's 2 GiB asset limit"
+            exit 1
+          fi
+
+          # Both sums are published: this one covers the file as downloaded,
+          # and the existing .img.sha256 covers it after decompression.
+          sha256sum "$image.xz" > "$image.xz.sha256"
+          ls -la
+        shell: bash
+
       - name: Refuse to publish an incomplete release
         # Belt and braces behind `needs`. An artefact can upload successfully
         # and still be wrong, and the failure mode here is a release people
@@ -99,7 +143,7 @@ jobs:
         run: |
           ls -la artifacts
           missing=0
-          for pattern in "*.deb" "*.rpm" "*.iso" "*-usb.img"; do
+          for pattern in "*.deb" "*.rpm" "*.iso" "*-usb.img.xz"; do
             # shellcheck disable=SC2086
             if ! compgen -G "artifacts/$pattern" >/dev/null; then
               echo "::error::no file matching $pattern"
@@ -113,33 +157,53 @@ jobs:
         # These were checked in the build container. Checking them again here
         # proves the files survived two artefact round-trips intact.
         #
-        # The paths have to be rewritten first: the ISO checksums record an
-        # absolute path from inside the build container and the package ones a
-        # leading "./", while everything here sits in one flat directory.
+        # Paths are rewritten first: the image checksums record an absolute
+        # path from inside the build container and the package ones a leading
+        # "./", while everything here sits in one flat directory.
         #
         # Rewritten field by field rather than with a regex over the whole
-        # line. The previous attempt used sed "s|.*/||", and .*/ is greedy - on
+        # line. An earlier version used sed "s|.*/||", and .*/ is greedy - on
         # "<hash>  ./name.deb" it matched through the hash as well and left a
         # bare filename, so sha256sum rejected every line as unformatted. A
-        # verification step that cannot parse its own input fails the release
+        # verification step that cannot parse its own input fails a release
         # while telling you nothing about the artefacts.
+        #
+        # A sums file whose target is not published here is skipped, not
+        # failed: the raw .img.sha256 IS published, because the notes tell
+        # people to check it after decompressing, but the raw .img itself is
+        # not - it is over GitHub's asset limit, which is the whole reason the
+        # image is compressed.
         run: |
           cd artifacts
           status=0
           for sums in *.sha256; do
             echo "== $sums"
             awk '{ name = $2; sub(/^\*/, "", name); sub(/.*\//, "", name); print $1 "  " name }' "$sums" > "$sums.local"
+
             if ! grep -qE '^[0-9a-fA-F]{64}  .' "$sums.local"; then
               echo "::error::could not parse $sums into checksum lines"
               cat "$sums"
               status=1
-            elif ! sha256sum -c "$sums.local"; then
+              rm -f "$sums.local"
+              continue
+            fi
+
+            present=0
+            while read -r _hash name; do
+              [ -f "$name" ] && present=$((present + 1))
+            done < "$sums.local"
+
+            if [ "$present" -eq 0 ]; then
+              echo "   skipped - it covers a file not published in this release"
+            elif ! sha256sum -c --ignore-missing "$sums.local"; then
               status=1
             fi
+
             rm -f "$sums.local"
           done
           exit $status
         shell: bash
+
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -150,13 +214,33 @@ jobs:
           body: |
             ## Zeroize Drive Wiper ${{ github.ref_name }}
 
-            **Write `zeroize-live-bookworm-amd64-usb.img` with Rufus in DD Image
-            mode**, not ISO mode. The `.img` carries the `ZEROIZE-OUT` partition
-            that certificates and logs are written to; the `.iso` does not.
+            ### Which file
 
-            Verify before writing:
+            **`zeroize-live-bookworm-amd64-usb.img.xz`** - write it with
+            **Rufus in DD Image mode**, not ISO mode. Rufus reads `.xz`
+            directly, so there is nothing to unpack first; 7-Zip will do it in
+            one step if you would rather.
+
+            That image carries the `ZEROIZE-OUT` partition certificates, logs
+            and diagnostics are written to. **The `.iso` does not** - booted
+            from the `.iso`, certificates land on a tmpfs and are gone at the
+            next power cycle.
+
+            It is compressed because GitHub caps a release asset at 2 GiB and
+            the raw image is 2.2 GB, about half of it an empty partition.
+
+            ### Verify it
+
+            The file as downloaded:
 
             ```sh
+            sha256sum -c zeroize-live-bookworm-amd64-usb.img.xz.sha256
+            ```
+
+            And after decompressing, if you unpack it yourself:
+
+            ```sh
+            unxz zeroize-live-bookworm-amd64-usb.img.xz
             sha256sum -c zeroize-live-bookworm-amd64-usb.img.sha256
             ```
 
