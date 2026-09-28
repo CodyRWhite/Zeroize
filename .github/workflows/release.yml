@@ -112,14 +112,34 @@ jobs:
       - name: Verify the checksums one last time
         # These were checked in the build container. Checking them again here
         # proves the files survived two artefact round-trips intact.
+        #
+        # The paths have to be rewritten first: the ISO checksums record an
+        # absolute path from inside the build container and the package ones a
+        # leading "./", while everything here sits in one flat directory.
+        #
+        # Rewritten field by field rather than with a regex over the whole
+        # line. The previous attempt used sed "s|.*/||", and .*/ is greedy - on
+        # "<hash>  ./name.deb" it matched through the hash as well and left a
+        # bare filename, so sha256sum rejected every line as unformatted. A
+        # verification step that cannot parse its own input fails the release
+        # while telling you nothing about the artefacts.
         run: |
           cd artifacts
+          status=0
           for sums in *.sha256; do
             echo "== $sums"
-            sed 's|.*/||' "$sums" > "$sums.local"
-            sha256sum -c "$sums.local"
+            awk '{ name = $2; sub(/^\*/, "", name); sub(/.*\//, "", name); print $1 "  " name }' "$sums" > "$sums.local"
+            if ! grep -qE '^[0-9a-fA-F]{64}  .' "$sums.local"; then
+              echo "::error::could not parse $sums into checksum lines"
+              cat "$sums"
+              status=1
+            elif ! sha256sum -c "$sums.local"; then
+              status=1
+            fi
             rm -f "$sums.local"
           done
+          exit $status
+        shell: bash
 
       - name: Publish
         uses: softprops/action-gh-release@v2
