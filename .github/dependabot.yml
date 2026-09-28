@@ -1,0 +1,68 @@
+version: 2
+
+# What this repository actually depends on is narrower than it looks. The .deb
+# and .rpm declare distribution packages and vendor nothing, and the live image
+# is assembled by live-build from Debian's own archive - none of which
+# Dependabot can or should touch. What it can usefully watch is the two things
+# that are pinned here: the GitHub Actions the workflows call, and the Python
+# packages a developer installs to run the tests.
+updates:
+  # ---------------------------------------------------------------------------
+  # GitHub Actions
+  # ---------------------------------------------------------------------------
+  # The higher-value of the two. Actions are pinned to a major tag, which keeps
+  # moving underneath the repository until it stops - the runner is already
+  # warning that actions/checkout@v4 and setup-python@v5 are being forced onto
+  # Node 24 because Node 20 is deprecated. That is the kind of change that
+  # breaks a build on a Tuesday for reasons unrelated to anything anyone did.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+      - github-actions
+    # One pull request rather than four. These move together and are reviewed
+    # together, and four separate CI runs for four one-line bumps is noise.
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # ---------------------------------------------------------------------------
+  # Python
+  # ---------------------------------------------------------------------------
+  # reportlab is the only runtime dependency, and only for the certificate; on
+  # a packaged install it comes from the distribution's archive rather than
+  # from here. The rest are the test and lint toolchain.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+      - python
+    groups:
+      # Separated because the consequences differ. A reportlab change alters
+      # what a certificate looks like and deserves a proper look at a rendered
+      # PDF; a pytest or ruff bump does not.
+      runtime:
+        patterns:
+          - reportlab
+      development:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - reportlab
+    ignore:
+      # Python itself is pinned by the oldest distribution this targets
+      # (Debian 12 ships 3.11), not by anything Dependabot can raise.
+      - dependency-name: python
