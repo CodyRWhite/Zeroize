@@ -342,6 +342,14 @@ def _nvme_reason(method: EraseMethod, capabilities: NvmeCapabilities | None) -> 
     if method.family == FAMILY_NVME_FORMAT:
         if not capabilities.format_supported:
             return "the controller does not support the Format NVM command (OACS bit 1 clear)"
+        # A controller refusing Sanitize is, on the firmware seen so far, also
+        # refusing Format NVM - with Invalid Opcode, despite OACS bit 1 being
+        # set. There is no safe way to probe Format, because every Format
+        # destroys the data, so the Sanitize probe stands in for both. Better
+        # to point at the remedy than to let the operator commit to a method
+        # that will be rejected the moment it matters.
+        if capabilities.sanitize_blocked:
+            return SANITIZE_BLOCKED_REASON
         if method is NVME_FORMAT_CRYPTO and not capabilities.crypto_erase_supported:
             return "the controller does not support cryptographic erase (FNA bit 2 clear)"
         return ""
@@ -358,6 +366,11 @@ def _nvme_reason(method: EraseMethod, capabilities: NvmeCapabilities | None) -> 
             return "the controller does not support this sanitize action (SANICAP bit clear)"
         if capabilities.sanitize_in_progress:
             return f"a sanitize is already running ({capabilities.sanitize_progress_percent:.0f}% complete)"
+        # Advertised is not the same as accepted. Checked last, so that a drive
+        # which lacks the action is told that plainly rather than being pointed
+        # at an unfreeze that would not help it.
+        if capabilities.sanitize_blocked:
+            return SANITIZE_BLOCKED_REASON
         return ""
 
     return ""
@@ -401,13 +414,40 @@ def _ata_sanitize_reason(method: EraseMethod, security: AtaSecurity | None) -> s
 def _discard_reason(device: Device, security: AtaSecurity | None) -> str:
     """Why a whole-device discard is unavailable, or an empty string.
 
-    Gated on the drive *guaranteeing* zeros after TRIM, not merely supporting
-    TRIM. Without that guarantee the drive may return the old contents from a
-    discarded block, so the operation would prove nothing and the verification
-    would be meaningless.
+    Gated on the drive *guaranteeing* zeros after a deallocate, not merely
+    supporting one. Without that guarantee the drive may return the old
+    contents from a discarded block - now, or after a power cycle, or after a
+    garbage-collection pass - so the operation proves nothing and reading it
+    back measures a courtesy rather than a guarantee.
+
+    NVMe and ATA report that guarantee in different places, and the field must
+    match the transport. An earlier version consulted only AtaSecurity, which
+    NVMe discovery never populates, so the ATA branch silently answered for
+    every NVMe drive as well: "does not report TRIM support", on drives that
+    report Data Set Management Supported in ONCS.
     """
     if device.rotational:
         return "TRIM applies to flash media, and this is a rotational drive"
+
+    if device.kind is DeviceKind.NVME:
+        capabilities = device.nvme
+        if capabilities is None:
+            return "the controller's namespace features could not be read"
+        # DLFEAT bits 2:0. 1 means deallocated blocks read back as zero, 2 means
+        # 0xFF, 0 means the controller promises nothing at all.
+        if capabilities.deallocated_read_behaviour == 0:
+            return (
+                "the controller does not report what a deallocated block reads "
+                "back as (DLFEAT 0), so a discard cannot be verified"
+            )
+        if not capabilities.deterministic_zeros_after_deallocate:
+            return (
+                "the controller does not guarantee zeros after a deallocate "
+                f"(DLFEAT read behaviour {capabilities.deallocated_read_behaviour}), "
+                "so a discard could not be verified"
+            )
+        return ""
+
     if security is None or not security.trim_supported:
         return "the drive does not report TRIM support"
     if not security.deterministic_zeros_after_trim:
@@ -416,6 +456,19 @@ def _discard_reason(device: Device, security: AtaSecurity | None) -> str:
             "so a discard could not be verified"
         )
     return ""
+
+
+#: Shown when the controller implements Sanitize and is refusing to run it.
+#:
+#: Phrased as an instruction rather than a diagnosis because there is something
+#: the operator can do about it. The method stays visible - hiding it would
+#: suggest the drive cannot be purged, when in fact it can be as soon as the
+#: controller is unstuck.
+SANITIZE_BLOCKED_REASON = (
+    "the controller is refusing Sanitize (Access Denied) although SANICAP "
+    "advertises it - use Unfreeze, which suspends this machine to RAM briefly, "
+    "then rescan"
+)
 
 
 def _scsi_reason(security: AtaSecurity | None) -> str:
@@ -509,10 +562,36 @@ def availability_for(device: Device) -> list[MethodAvailability]:
     """
     verdicts: list[MethodAvailability] = []
 
+    # A drive whose controller has put the media into read-only mode cannot be
+    # erased by anything. It is not a protection flag - nobody is refusing on
+    # the operator's behalf - the media simply will not accept writes, and the
+    # controller answers a format or sanitize with "Access Denied". Saying so
+    # here, against every method, beats letting someone select the drive, wait,
+    # and read a refusal that looks like a fault in this tool.
+    read_only_media = (
+        device.nvme.media_read_only if device.nvme is not None else False
+    )
+
     for method in ALL_METHODS:
         if not device.can_be_erased:
             reason = device.protection_reason or "the device is protected"
             verdicts.append(MethodAvailability(method=method, supported=False, reason=reason))
+            continue
+
+        if read_only_media:
+            verdicts.append(
+                MethodAvailability(
+                    method=method,
+                    supported=False,
+                    reason=(
+                        "the controller has placed this drive's media in read-only "
+                        "mode after exhausting its spare blocks (SMART critical "
+                        "warning bit 3). The state is permanent and no erase can "
+                        "succeed - the drive is at end of life and should be "
+                        "destroyed physically"
+                    ),
+                )
+            )
             continue
 
         if method.family in (FAMILY_NVME_FORMAT, FAMILY_NVME_SANITIZE):

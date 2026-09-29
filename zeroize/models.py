@@ -127,6 +127,19 @@ class NvmeCapabilities:
     sanitize_crypto_supported: bool = False
     sanitize_block_supported: bool = False
     sanitize_overwrite_supported: bool = False
+    #: SMART critical warning bit 3. The controller has exhausted its spare
+    #: blocks and put the media into read-only mode - permanently, by design.
+    #: Every erase method fails on such a drive, firmware and software alike,
+    #: and the controller answers a format or sanitize with "Access Denied".
+    #: Knowing this before the operator selects the drive turns a confusing
+    #: refusal into a plain statement that the drive is finished.
+    media_read_only: bool = False
+    #: SMART critical warning bit 2 - the subsystem reports its reliability as
+    #: degraded. Not itself a bar to erasing, but worth saying out loud.
+    reliability_degraded: bool = False
+    #: Wear indicator, as a percentage. Over 100 is allowed and means the drive
+    #: is past its rated endurance.
+    percentage_used: int = 0
     #: A sanitize started before this boot may still be running.
     sanitize_in_progress: bool = False
     sanitize_progress_percent: float = 0.0
@@ -140,10 +153,39 @@ class NvmeCapabilities:
     active_namespaces: list[int] = field(default_factory=list)
     model: str = ""
     firmware: str = ""
+    #: Identify Namespace DLFEAT bits 2:0 - what a deallocated block is
+    #: GUARANTEED to read back as. 0 means the controller reports nothing,
+    #: 1 means 0x00, 2 means 0xFF.
+    #:
+    #: This is what decides whether a discard counts as an erase. A drive
+    #: reporting 0 may return zeros for a deallocated block today and its old
+    #: contents after a power cycle or a garbage-collection pass, so verifying
+    #: by reading measures a courtesy rather than a guarantee - and a method
+    #: that passes its own verification while leaving data recoverable is worse
+    #: than one that plainly fails.
+    deallocated_read_behaviour: int = 0
+    #: Whether Sanitize is accepted RIGHT NOW, as opposed to advertised in
+    #: SANICAP. ``None`` means it was not probed.
+    #:
+    #: Tri-state on purpose. "Not probed" is not "available", and collapsing
+    #: them is how an operator ends up selecting a drive, waiting, and being
+    #: told the erase was refused.
+    sanitize_reachable: bool | None = None
     #: Raw register values, kept for the log and for diagnosing odd drives.
     raw_oacs: int = 0
     raw_fna: int = 0
     raw_sanicap: int = 0
+    raw_dlfeat: int = 0
+
+    @property
+    def deterministic_zeros_after_deallocate(self) -> bool:
+        """Does the controller guarantee zeros from a deallocated block?"""
+        return self.deallocated_read_behaviour == 1
+
+    @property
+    def sanitize_blocked(self) -> bool:
+        """Sanitize is advertised but the controller is refusing it."""
+        return self.any_sanitize_supported and self.sanitize_reachable is False
 
     @property
     def any_sanitize_supported(self) -> bool:

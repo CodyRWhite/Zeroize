@@ -206,10 +206,12 @@ def run_format(context: JobContext) -> EraseOutcome:
             continue
 
         if not result.ok:
-            _log.error("Format failed on %s: %s", description, result.failure_summary)
-            passes.append(
-                PassResult(label=pass_label, succeeded=False, detail=result.failure_summary)
-            )
+            detail = result.failure_summary
+            explanation = _explain_status(detail)
+            if explanation:
+                detail = f"{detail}. {explanation}"
+            _log.error("Format failed on %s: %s", description, detail)
+            passes.append(PassResult(label=pass_label, succeeded=False, detail=detail))
             for remaining in targets[index:]:
                 passes.append(
                     PassResult(
@@ -218,7 +220,7 @@ def run_format(context: JobContext) -> EraseOutcome:
                         detail="not attempted",
                     )
                 )
-            return EraseOutcome(succeeded=False, passes=passes, errors=[result.failure_summary])
+            return EraseOutcome(succeeded=False, passes=passes, errors=[detail])
 
         _log.info("Format completed on %s in %.1fs", description, result.duration_seconds)
         passes.append(PassResult(label=pass_label, succeeded=True))
@@ -342,6 +344,67 @@ def _announce_output(controller: str, what: str, result) -> None:
         )
 
 
+#: NVMe status conditions worth explaining, keyed on what nvme-cli prints.
+#:
+#: The controller is refusing these commands, not failing at them, and the
+#: difference matters: "Access Denied" on a drive that supports Sanitize
+#: perfectly well means something is holding the namespace, and the operator
+#: needs to know WHAT rather than be told the erase did not work.
+_STATUS_EXPLANATIONS: tuple[tuple[str, str], ...] = (
+    (
+        "access denied",
+        "The controller refused the command rather than failing it. On a used "
+        "drive this is almost always one of two things:"
+        "  (1) TCG Opal / SED locking is enabled, so the drive will not accept "
+        "a format or sanitize until the locking range is unlocked or the drive "
+        "is reverted - a PSID revert, using the code printed on the drive "
+        "label, both reverts and erases;"
+        "  (2) the namespace is write protected - check "
+        "'nvme get-feature /dev/nvmeXn1 -f 0x84 -H' and the NSATTR field of "
+        "'nvme id-ns /dev/nvmeXn1 -H'."
+        " A software overwrite will fail for the same reason; the lock has to "
+        "be cleared first.",
+    ),
+    (
+        "invalid field",
+        "The controller rejected a parameter of the command. Most often the "
+        "requested erase action is not one this drive implements, even though "
+        "its capability registers claimed it.",
+    ),
+    (
+        "namespace is write protected",
+        "The namespace is write protected. Clear it with "
+        "'nvme set-feature /dev/nvmeXn1 -f 0x84 -v 0' if the drive permits it, "
+        "or check whether Opal locking is holding it.",
+    ),
+    (
+        "invalid opcode",
+        "The controller does not implement this command at all, whatever its "
+        "capability registers report. Try NVMe Format if you were sanitizing, "
+        "or a software overwrite if neither is accepted.",
+    ),
+)
+
+
+def _explain_status(summary: str) -> str:
+    """Return operator-facing guidance for a known NVMe status, or "".
+
+    Matched on the text nvme-cli prints rather than on a numeric code: the
+    code is not reliably exposed through its exit status, and the wording of
+    these particular statuses has been stable across the versions this tool
+    supports.
+    """
+    # Underscores folded to spaces before matching. nvme-cli prints the symbol
+    # name - "ACCESS_DENIED" - while these needles are written as prose, and
+    # the first version of this matched neither the status it was written for
+    # nor any other.
+    haystack = (summary or "").casefold().replace("_", " ")
+    for needle, explanation in _STATUS_EXPLANATIONS:
+        if needle in haystack:
+            return explanation
+    return ""
+
+
 def _alternative_hint(device: Device) -> str:
     """Name a method this drive does support, for a method it would not run.
 
@@ -431,10 +494,14 @@ def run_sanitize(context: JobContext) -> EraseOutcome:
             passes=[PassResult(label=label, succeeded=True, detail="dry run - not executed")],
         )
     if not start_result.ok:
-        _log.error("Sanitize refused on %s: %s", controller, start_result.failure_summary)
+        detail = start_result.failure_summary
+        explanation = _explain_status(detail)
+        if explanation:
+            detail = f"{detail}. {explanation}"
+        _log.error("Sanitize refused on %s: %s", controller, detail)
         return EraseOutcome.failure(
-            start_result.failure_summary,
-            passes=[PassResult(label=label, succeeded=False, detail=start_result.failure_summary)],
+            detail,
+            passes=[PassResult(label=label, succeeded=False, detail=detail)],
         )
 
     # Logged at INFO even on success. run() logs stdout at debug, which does
