@@ -9,4 +9,4 @@
 # every target distribution ships it (python3-gi / python3-gobject) along with
 # the GTK 4 and libadwaita typelibs the interface needs.
 
-reportlab>=4.0
+reportlab>=5.0.1
