@@ -33,8 +33,6 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
-from ..logging_setup import get_logger
-
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import letter
@@ -68,6 +66,7 @@ from ..branding import (
     wordmark_letterspacing,
 )
 from ..config import Organisation, Settings
+from ..logging_setup import get_logger
 from ..models import EraseResult, Partition, RunSummary, format_duration, format_size
 from .naming import certificate_id, format_certificate_datetime
 

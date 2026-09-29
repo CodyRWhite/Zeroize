@@ -14,7 +14,6 @@ from zeroize.discovery import nvme
 from zeroize.erase import methods
 from zeroize.models import Device, DeviceKind, NvmeCapabilities
 
-
 # ---------------------------------------------------------------------------
 # The sanitize log, as nvme-cli 2.x actually emits it
 # ---------------------------------------------------------------------------
