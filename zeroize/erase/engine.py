@@ -30,6 +30,7 @@ from datetime import datetime
 
 from ..config import Settings
 from ..discovery import collect_hardware_info, collect_system_info, machine_identifier
+from ..discovery.identity import confirm_identity
 from ..logging_setup import get_logger
 from ..models import Device, EraseMethod, EraseResult, JobState, PassResult, RunSummary
 from ..process import is_dry_run, run
@@ -274,6 +275,18 @@ class EraseRun:
             return device.protection_reason or "the device carries the running system"
         if device.read_only:
             return "the device is read-only"
+
+        # 1a. Is this still the drive that was selected?
+        #
+        #     Device node numbers do not survive re-enumeration, and everything
+        #     that renumbers - a controller reset, a PCI rescan, a suspend -
+        #     frees the old number for another drive to take. A drive that has
+        #     merely gone away fails loudly and is not the danger; a different
+        #     drive inheriting the number is, and nothing else in this
+        #     preflight would notice it.
+        moved = confirm_identity(device)
+        if moved:
+            return moved
 
         # 2. The method must be one this drive actually said it supports.
         verdict = next(
