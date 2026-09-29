@@ -64,9 +64,29 @@ def can_attempt(device: Device) -> str:
         return device.protection_reason or "the device carries the running system"
     if device.is_mounted:
         return "the device has mounted filesystems; unmount them first"
+    if device.nvme is not None and device.nvme.sanitize_blocked:
+        return ""
     if device.ata is None or not device.ata.frozen:
         return "the drive is not frozen"
     return ""
+
+
+def needs_suspend(device: Device) -> bool:
+    """Is a suspend the only remedy for this drive, rather than the fallback?
+
+    True for an NVMe controller refusing Sanitize. A bus reset does not clear
+    that - it was tried against both drives on the bench and changed nothing,
+    while a three-second suspend cleared it every time. Offering a detach
+    first would only add a step that is known not to work.
+    """
+    return device.nvme is not None and device.nvme.sanitize_blocked
+
+
+def _nvme_sanitize_reachable(device: Device) -> bool | None:
+    """Re-probe whether this controller will accept Sanitize now."""
+    from ..discovery.nvme import controller_path_for, probe_sanitize_reachable
+
+    return probe_sanitize_reachable(controller_path_for(device.path))
 
 
 def _read_frozen_state(device_path: str) -> bool | None:
@@ -204,6 +224,39 @@ def unfreeze(device: Device, *, allow_suspend: bool = False) -> tuple[bool, str]
     if problem:
         return False, problem
 
+    # NVMe: the suspend is the only thing that works, so there is no bus-reset
+    # stage to try first. Without this the caller would detach and rescan, see
+    # no change, and only then offer the suspend - an extra minute spent on a
+    # remedy already known to fail on this firmware.
+    if needs_suspend(device):
+        # The suspend sits inside a branch testing allow_suspend, not behind an
+        # early return, so that the invariant "never suspends unasked" stays
+        # mechanically checkable rather than merely true.
+        if allow_suspend:
+            suspended, suspend_detail = suspend_to_ram()
+            if not suspended:
+                return False, suspend_detail
+
+            reachable = _nvme_sanitize_reachable(device)
+            if reachable is True:
+                _log.info("Sanitize became reachable on %s after a suspend", device.path)
+                return True, f"{suspend_detail}; the controller now accepts Sanitize"
+            if reachable is None:
+                return True, (
+                    f"{suspend_detail}; the controller did not answer at "
+                    f"{device.path} afterwards - rescan for drives, it may have "
+                    f"been renumbered"
+                )
+            return False, (
+                f"{suspend_detail}, but the controller is still refusing Sanitize. "
+                f"A software overwrite is unaffected and remains available."
+            )
+
+        return False, (
+            "The controller is refusing Sanitize. A bus reset does not clear "
+            "this; only suspending the machine briefly does."
+        )
+
     if allow_suspend:
         # The bus reset has already been tried and failed, so go straight to
         # the thing the operator has just agreed to.
@@ -248,6 +301,10 @@ def unfreeze(device: Device, *, allow_suspend: bool = False) -> tuple[bool, str]
 
 
 def clear_freezes(devices: list[Device]) -> list[str]:
+    # NOTE: this never touches an NVMe controller refusing Sanitize. The only
+    # remedy there is suspending the whole machine, and doing that unasked -
+    # at startup, before the operator has even seen the drive list - would be
+    # indefensible. Those drives are surfaced with a button instead.
     """Detach every eligible frozen drive, then rescan the bus once.
 
     Returns the paths that were detached, so the caller knows whether a

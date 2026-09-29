@@ -85,9 +85,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     thaw = subparsers.add_parser(
         "unfreeze",
-        help="clear an ATA security freeze so Secure Erase becomes available",
+        help="clear a firmware block so a firmware erase becomes available",
     )
     thaw.add_argument("--device", required=True, metavar="PATH", help="e.g. /dev/sda")
+    thaw.add_argument(
+        "--suspend",
+        action="store_true",
+        help=(
+            "allow suspending this machine for a few seconds. Required for an "
+            "NVMe controller refusing Sanitize, where nothing else clears it. "
+            "Affects every drive attached, so it is never done implicitly."
+        ),
+    )
 
     erase = subparsers.add_parser("erase", help="erase drives without the interface")
     erase.add_argument(
@@ -185,10 +194,17 @@ def _command_list(settings, simulate: bool) -> int:
 
 
 def _command_unfreeze(arguments, simulate: bool) -> int:
-    """Clear an ATA security freeze, then report what the drive now allows."""
+    """Clear a firmware block on erasing, then report what the drive allows.
+
+    Two different conditions reach here. An ATA drive frozen by SECURITY FREEZE
+    LOCK at POST is cleared by detaching and re-attaching that one drive. An
+    NVMe controller answering Sanitize with Access Denied is not - only
+    suspending the machine clears that, and it affects every drive attached, so
+    it is never done without --suspend.
+    """
     from .discovery import discover_devices
     from .erase.methods import availability_for
-    from .erase.unfreeze import unfreeze
+    from .erase.unfreeze import can_attempt, needs_suspend, suspend_warning, unfreeze
 
     devices = {device.path: device for device in discover_devices(simulate=simulate)}
     device = devices.get(arguments.device)
@@ -196,16 +212,42 @@ def _command_unfreeze(arguments, simulate: bool) -> int:
         print(f"No such device: {arguments.device}", file=sys.stderr)
         return 2
 
-    if device.ata is None or not device.ata.frozen:
-        print(f"{arguments.device} is not frozen; nothing to do.")
+    # Asked once, of the module that owns the question. Asking device.ata
+    # directly here is what made this command answer "not frozen; nothing to
+    # do" for an NVMe drive whose firmware erase was blocked.
+    problem = can_attempt(device)
+    if problem:
+        print(f"{arguments.device}: {problem}")
         return 0
 
-    print(f"Attempting to clear the security freeze on {arguments.device}...")
-    cleared, detail = unfreeze(device)
+    allow_suspend = bool(getattr(arguments, "suspend", False))
+
+    if needs_suspend(device):
+        if not allow_suspend:
+            print(
+                f"{arguments.device}: the controller is refusing Sanitize.\n"
+                f"\n"
+                f"A bus reset does not clear this; only suspending the machine "
+                f"for a few seconds does.\n"
+                f"Every drive attached is affected, and no erase may be "
+                f"running.\n"
+                f"\n"
+                f"Re-run with --suspend to go ahead.",
+                file=sys.stderr,
+            )
+            warning = suspend_warning()
+            if warning:
+                print(f"\n{warning}", file=sys.stderr)
+            return 1
+        print(f"Suspending briefly to unstick {arguments.device}...")
+    else:
+        print(f"Attempting to clear the security freeze on {arguments.device}...")
+
+    cleared, detail = unfreeze(device, allow_suspend=allow_suspend)
     print(f"  {detail}")
 
     if not cleared:
-        print("\nStill frozen.", file=sys.stderr)
+        print("\nStill blocked.", file=sys.stderr)
         return 1
 
     # The device may have come back under a different name, so re-discover and
@@ -213,10 +255,18 @@ def _command_unfreeze(arguments, simulate: bool) -> int:
     print("\nRescanning...")
     for candidate in discover_devices(simulate=simulate):
         if device.serial and candidate.serial == device.serial:
-            frozen = candidate.ata.frozen if candidate.ata else None
-            print(f"  {candidate.path}  serial {candidate.serial}  frozen={frozen}")
+            state = []
+            if candidate.ata is not None:
+                state.append(f"frozen={candidate.ata.frozen}")
+            if candidate.nvme is not None:
+                state.append(f"sanitize_blocked={candidate.nvme.sanitize_blocked}")
+            print(f"  {candidate.path}  serial {candidate.serial}  {' '.join(state)}")
+
+            # Report every firmware method that became available, not only the
+            # ATA ones - on an NVMe drive the whole point was Sanitize.
+            firmware = {"ata_secure_erase", "nvme_sanitize", "nvme_format"}
             for verdict in availability_for(candidate):
-                if verdict.supported and verdict.method.family == "ata_secure_erase":
+                if verdict.supported and verdict.method.family in firmware:
                     print(f"  now available: {verdict.method.certificate_name}")
             return 0
 

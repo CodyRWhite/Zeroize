@@ -358,6 +358,26 @@ class MainWindow(Adw.ApplicationWindow):
             return
 
         _log.info("Operator requested an unfreeze of %s", device.path)
+
+        # An NVMe controller refusing Sanitize has only one remedy, so ask for
+        # it directly rather than spending a stage on a bus reset that is known
+        # not to clear this.
+        from ..erase.unfreeze import needs_suspend
+
+        if needs_suspend(device):
+            self._prompt_suspend(
+                device,
+                (
+                    f"{device.path} reports that it supports Sanitize, and the "
+                    f"controller is refusing to run it.\n\n"
+                    f"Suspending the machine for about three seconds clears "
+                    f"that. The screen will go blank and the machine will look "
+                    f"as though it is off. It wakes itself - nothing needs "
+                    f"pressing."
+                ),
+            )
+            return
+
         self._start_unfreeze(device, allow_suspend=False)
 
     def _start_unfreeze(self, device: Device, *, allow_suspend: bool) -> None:
@@ -412,28 +432,52 @@ class MainWindow(Adw.ApplicationWindow):
             return GLib.SOURCE_REMOVE
 
         # Stage two, on request only.
+        self._prompt_suspend(
+            device,
+            (
+                f"{detail}\n\n"
+                f"The next thing to try is suspending the machine for about "
+                f"three seconds. That removes power from the drive, which "
+                f"clears the freeze on controllers where a bus reset does not."
+            ),
+        )
+        return GLib.SOURCE_REMOVE
+
+    def _prompt_suspend(self, device: Device, reason: str) -> None:
+        """Ask before suspending the machine, and say what will happen.
+
+        This is the one action that reaches past the selected drive. Everything
+        else the tool does is confined to one device; this puts the whole
+        machine to sleep, and on a bench with several drives in flight the
+        operator needs to know that beforehand rather than while the screen is
+        already dark.
+
+        Shared by both callers so the ATA fallback and the NVMe path describe
+        the same event in the same words.
+        """
         from ..erase.unfreeze import suspend_warning
 
-        warning = suspend_warning()
         body = (
-            f"{detail}\n\n"
-            f"The next thing to try is suspending the machine for about three "
-            f"seconds. That removes power from the drive, which clears the "
-            f"freeze on controllers where a bus reset does not.\n\n"
+            f"{reason}\n\n"
             f"The screen will go blank and the machine will appear to be off. "
-            f"It wakes itself - nothing needs pressing."
+            f"It wakes itself - nothing needs pressing.\n\n"
+            f"Every drive in this machine is affected, not only this one, and "
+            f"no erase may be running."
         )
+
+        # Shown only when it applies: running from the USB medium is the case
+        # where a suspend can take the whole session down with it.
+        warning = suspend_warning()
         if warning:
             body += f"\n\n{warning}"
 
         confirm_action(
             self,
-            f"Suspend to clear the freeze on {device.path}?",
+            f"Suspend this machine to unfreeze {device.path}?",
             body,
             confirm_label="Suspend and retry",
             on_confirm=lambda: self._start_unfreeze(device, allow_suspend=True),
         )
-        return GLib.SOURCE_REMOVE
 
     def _on_export_diagnostics(self) -> None:
         """Gather logs and system state onto the certificate volume.
