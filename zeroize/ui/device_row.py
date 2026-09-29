@@ -187,21 +187,48 @@ class DeviceRow(Gtk.ListBoxRow):
         if not self._methods and self.device.can_be_erased:
             messages.append((error_icon, "No erase method is available for this drive"))
 
-        # A frozen drive is the one warning an operator can act on from here,
-        # so it gets a button rather than a sentence telling them to open a
-        # terminal. Not automatic during a scan: detaching a device renames it
-        # and disturbs the bus, which a destructive tool should not do without
-        # being asked.
-        frozen = (
+        # A drive whose firmware erase is blocked is the one warning an operator
+        # can act on from here, so it gets a button rather than a sentence
+        # telling them to open a terminal. Never automatic during a scan:
+        # clearing it disturbs the bus, or in the NVMe case the whole machine,
+        # which a destructive tool should not do unasked.
+        #
+        # Two different conditions with two different remedies:
+        #
+        #   ATA  - the firmware issued SECURITY FREEZE LOCK at POST. Detaching
+        #          and re-attaching that one drive usually clears it.
+        #   NVMe - the controller answers Sanitize with Access Denied although
+        #          SANICAP advertises it. A bus reset does not clear this; only
+        #          suspending the machine briefly does, and that affects every
+        #          drive attached.
+        #
+        # Computed together because the button is the same button, and kept
+        # apart because the sentences beside it must not be.
+        ata_frozen = (
             self.device.ata is not None
             and self.device.ata.frozen
             and self.device.can_be_erased
         )
-        if frozen:
+        nvme_blocked = (
+            self.device.nvme is not None
+            and self.device.nvme.sanitize_blocked
+            and self.device.can_be_erased
+        )
+        frozen = ata_frozen or nvme_blocked
+
+        if ata_frozen:
             messages.append(
                 (
                     warning_icon,
                     "Frozen by the system firmware - Secure Erase is blocked until it is cleared",
+                )
+            )
+        elif nvme_blocked:
+            messages.append(
+                (
+                    warning_icon,
+                    "The controller is refusing Sanitize - the firmware erase is "
+                    "blocked until it is unstuck",
                 )
             )
 
@@ -223,12 +250,32 @@ class DeviceRow(Gtk.ListBoxRow):
         if frozen and self._on_unfreeze is not None:
             actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             actions.set_margin_top(4)
-            self._unfreeze_button = Gtk.Button(label="Try to unfreeze")
-            self._unfreeze_button.set_tooltip_text(
-                "Detach and re-attach the drive to clear the firmware's security "
-                "freeze, then rescan the bus. Leaves the rest of the machine "
-                "alone. The drive may come back under a different name."
-            )
+
+            # The label says what it costs. "Try to unfreeze" is honest for the
+            # ATA case, where one drive is detached and the rest of the machine
+            # carries on; it would not be for the NVMe case, where the machine
+            # sleeps. An operator should be able to tell those apart before
+            # pressing, not from the dialog that follows.
+            if nvme_blocked:
+                label = "Unfreeze (suspends this machine)"
+                tooltip = (
+                    "Suspend this machine for about three seconds and wake it "
+                    "again. That is the only thing that clears a controller "
+                    "refusing Sanitize - a bus reset does not. Every drive "
+                    "attached is affected, and no erase may be running. You "
+                    "will be asked to confirm."
+                )
+            else:
+                label = "Try to unfreeze"
+                tooltip = (
+                    "Detach and re-attach the drive to clear the firmware's "
+                    "security freeze, then rescan the bus. Leaves the rest of "
+                    "the machine alone. The drive may come back under a "
+                    "different name."
+                )
+
+            self._unfreeze_button = Gtk.Button(label=label)
+            self._unfreeze_button.set_tooltip_text(tooltip)
             self._unfreeze_button.connect(
                 "clicked", lambda _button: self._on_unfreeze(self.device)
             )

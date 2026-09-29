@@ -97,17 +97,43 @@ def _os_pretty_name() -> str:
     return match.group("name").strip() if match else f"{platform.system()} {platform.release()}"
 
 
+#: /proc/cpuinfo keys that name the processor, best first.
+#:
+#: Order is the whole point. x86 lists BOTH "model" (a number, 158) and
+#: "model name" (the name), with the number first - so a matcher that accepts
+#: either and stops at the first hit reads the number, and the certificate says
+#: "Processor: 158". The bare "model" key is kept for arm64, where the line
+#: reads "Model : Raspberry Pi 4" and there is no "model name" at all, but it
+#: is consulted only after the better keys have been ruled out across the
+#: whole file.
+_PROCESSOR_KEYS = ("model name", "cpu model", "hardware", "model")
+
+
 def _processor_model() -> str:
     """CPU model name from ``/proc/cpuinfo``, with the architecture appended."""
-    model = ""
+    found: dict[str, str] = {}
     try:
         for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
-            # x86 uses "model name"; arm64 uses "Model" or "CPU implementer".
-            if line.lower().startswith(("model name", "cpu model", "model\t")):
-                model = line.split(":", 1)[1].strip()
-                break
+            key, separator, value = line.partition(":")
+            if not separator:
+                continue
+            key = key.strip().lower()
+            if key in _PROCESSOR_KEYS and key not in found:
+                found[key] = value.strip()
     except OSError:
         pass
+
+    model = ""
+    for key in _PROCESSOR_KEYS:
+        candidate = found.get(key, "")
+        # A bare number is an identifier, not a name. Rejecting it here means
+        # that on a platform where "model" is all there is, a numeric one falls
+        # through to platform.processor() instead of being printed as though it
+        # were a product name.
+        if candidate and not candidate.isdigit():
+            model = candidate
+            break
+
     model = model or platform.processor() or _UNKNOWN
     architecture = platform.machine()
     return f"{model} ({architecture})" if architecture and architecture not in model else model

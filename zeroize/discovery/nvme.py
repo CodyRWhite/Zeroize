@@ -176,6 +176,64 @@ def _coerce_register(value: object) -> int:
     return 0
 
 
+def _unwrap_device(payload: object, *expected: str) -> dict | None:
+    """Return the object that actually carries *expected*, descending one level.
+
+    nvme-cli 2.x keys each controller's log by its device name::
+
+        {"nvme0": {"sprog": ..., "sstat": {...}, "cdw10_info": 2}}
+
+    Older builds put those fields at the top level. Searching only the top
+    level finds nothing on the newer output, which sends the caller to the
+    text fallback - and the text output does not print everything the JSON
+    carries, so the result is not an error but a quietly poorer answer.
+
+    Only one level is descended, and only into a dict that holds one of the
+    expected names, so an unrelated nested object cannot be mistaken for the
+    log body.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if any(name in payload for name in expected):
+        return payload
+    for value in payload.values():
+        if isinstance(value, dict) and any(name in value for name in expected):
+            return value
+    return None
+
+
+#: The leading code in nvme-cli's decoded status, e.g.
+#: "(1) Most Recent Sanitize Command Completed Successfully."
+_SANITIZE_STATUS_CODE = re.compile(r"^\s*\((?P<code>\d+)\)")
+
+
+def _coerce_status(value: object) -> int | None:
+    """SSTAT's three status bits, from any form nvme-cli reports them in.
+
+    Returns ``None`` rather than 0 when the value cannot be read: 0 is a
+    meaningful status ("never sanitized"), so a failure to parse must not be
+    able to masquerade as one.
+    """
+    if isinstance(value, str):
+        match = _SANITIZE_STATUS_CODE.match(value)
+        if match:
+            return int(match.group("code"))
+        register = _coerce_register(value)
+        return register & _SSTAT_STATUS_MASK if value.strip() else None
+    if isinstance(value, bool):
+        return int(value) & _SSTAT_STATUS_MASK
+    if isinstance(value, int):
+        return value & _SSTAT_STATUS_MASK
+    return None
+
+
+#: "Global Data Erased set: ..." / "Global Data Erased cleared: ..." in the
+#: human-readable log page. Needed because the SSTAT hex printed beside it does
+#: NOT include bit 8, so the text output is the only place the flag appears
+#: when the JSON cannot be read.
+_GLOBAL_ERASED_TEXT = re.compile(r"Global Data Erased\s+(?P<state>set|cleared)", re.IGNORECASE)
+
+
 def _first_present(payload: dict, *names: str) -> object | None:
     """First key of *names* actually present, or ``None`` if none of them are.
 
@@ -210,6 +268,115 @@ def _parse_sanitize_text(output: str) -> tuple[object, object, object] | None:
     if "SSTAT" not in found:
         return None
     return found["SSTAT"], found.get("SPROG", 0), found.get("SCDW10", 0)
+
+
+#: SMART critical warning bits that matter to an erase.
+_CRITICAL_RELIABILITY_DEGRADED = 0x04
+_CRITICAL_MEDIA_READ_ONLY = 0x08
+
+
+def read_health(controller_path: str) -> tuple[bool, bool, int]:
+    """Return ``(media_read_only, reliability_degraded, percentage_used)``.
+
+    An NVMe controller that has run out of spare blocks puts the media into
+    read-only mode and sets bit 3 of the SMART critical warning. That state is
+    permanent: the drive will answer a format or a sanitize with "Access
+    Denied", and a software overwrite fails just as surely, because the media
+    genuinely will not accept writes any more.
+
+    Worth reading during discovery rather than after a failed erase. The
+    operator otherwise selects the drive, waits, and is told the erase was
+    refused - which reads like a tool problem rather than a dead drive.
+
+    Missing or unreadable health is reported as healthy. This gates a warning,
+    not the erase itself, and refusing to offer a drive because its SMART log
+    could not be read would be worse than the warning being absent.
+    """
+    payload = _nvme_json(["smart-log", controller_path])
+    if not isinstance(payload, dict):
+        return False, False, 0
+
+    warning = _coerce_register(
+        _first_present(payload, "critical_warning", "critical_comp_time") or 0
+    )
+    # Some builds nest it as an object of decoded flags.
+    raw_warning = payload.get("critical_warning")
+    if isinstance(raw_warning, dict):
+        warning = _coerce_register(raw_warning.get("value", 0))
+
+    used = _coerce_register(_first_present(payload, "percent_used", "percentage_used") or 0)
+
+    return (
+        bool(warning & _CRITICAL_MEDIA_READ_ONLY),
+        bool(warning & _CRITICAL_RELIABILITY_DEGRADED),
+        used,
+    )
+
+
+#: Identify Namespace DLFEAT bits 2:0 - the read behaviour of a deallocated
+#: logical block. 0 = not reported, 1 = reads as 0x00, 2 = reads as 0xFF.
+_DLFEAT_READ_BEHAVIOUR_MASK = 0x07
+
+
+def read_namespace_dlfeat(namespace_path: str) -> int:
+    """DLFEAT for one namespace, or 0 when it cannot be read.
+
+    0 is both "not reported" and "could not read", and here the two mean the
+    same thing to the caller: without a positive guarantee a discard must not
+    be offered as an erase. Erring towards 0 withholds a method; erring the
+    other way would certify one that proves nothing.
+    """
+    payload = _nvme_json(["id-ns", namespace_path])
+    body = _unwrap_device(payload, "dlfeat", "nsfeat", "nsze")
+    if not isinstance(body, dict):
+        return 0
+    return _coerce_register(_first_present(body, "dlfeat") or 0)
+
+
+def probe_sanitize_reachable(controller_path: str) -> bool | None:
+    """Will this controller accept a Sanitize command at all?
+
+    Answers a different question from SANICAP. SANICAP says what the controller
+    implements; this says whether it will run it now. Samsung drives on some
+    OEM firmware advertise Sanitize and refuse every action with Access Denied
+    until the machine has been suspended to RAM and resumed.
+
+    Sanitize Exit Failure Mode (SANACT=1) is the probe because it ERASES
+    NOTHING: it asks the controller to leave a failed-sanitize state, and on a
+    drive with no failed sanitize to leave it has nothing to do.
+
+    Classified on the message, never on the exit status. A drive with nothing
+    to exit legitimately answers Invalid Field, which is a refusal of the
+    ARGUMENT and means the command itself is reachable. Only Access Denied
+    means the firmware is refusing Sanitize. Returning ``None`` when the probe
+    could not run keeps "unknown" distinct from "blocked".
+    """
+    if not tool_available("nvme"):
+        return None
+
+    result = run(
+        ["nvme", "sanitize", controller_path, "--sanact=1"],
+        timeout=60.0,
+        log_output=False,
+    )
+
+    haystack = f"{result.stdout} {result.stderr}".casefold().replace("_", " ")
+    if "access denied" in haystack:
+        _log.warning(
+            "%s refuses Sanitize (Access Denied). A firmware erase will not run "
+            "until the controller is unstuck; suspending to RAM and resuming "
+            "clears it on the drives seen so far.",
+            controller_path,
+        )
+        return False
+
+    # An exit code with no recognisable message means the probe itself did not
+    # work - a missing subcommand, a permissions problem. That is not evidence
+    # the drive is fine, so it is reported as unknown.
+    if not result.ok and not haystack.strip():
+        return None
+
+    return True
 
 
 def read_capabilities(device_path: str) -> NvmeCapabilities | None:
@@ -253,11 +420,21 @@ def read_capabilities(device_path: str) -> NvmeCapabilities | None:
         raw_sanicap=sanicap,
     )
 
+    dlfeat = read_namespace_dlfeat(device_path)
+    capabilities.raw_dlfeat = dlfeat
+    capabilities.deallocated_read_behaviour = dlfeat & _DLFEAT_READ_BEHAVIOUR_MASK
+
     if capabilities.any_sanitize_supported:
         log = read_sanitize_status(controller)
         if log is not None:
             capabilities.sanitize_in_progress = log.in_progress
             capabilities.sanitize_progress_percent = log.percent
+
+        # Only probe when nothing is already running. Exit Failure Mode against
+        # a sanitize in progress would be asking the controller to abandon work
+        # it is part way through.
+        if not capabilities.sanitize_in_progress:
+            capabilities.sanitize_reachable = probe_sanitize_reachable(controller)
 
     # Enumerate namespaces so the erase path knows whether a single format can
     # cover the whole drive. Reported namespace count (NN) is the maximum the
@@ -269,13 +446,15 @@ def read_capabilities(device_path: str) -> NvmeCapabilities | None:
 
     _log.info(
         "%s capabilities: format=%s crypto=%s sanitize(crypto=%s block=%s overwrite=%s) "
-        "[oacs=0x%04x fna=0x%02x sanicap=0x%08x]",
+        "reachable=%s dlfeat=0x%02x [oacs=0x%04x fna=0x%02x sanicap=0x%08x]",
         controller,
         capabilities.format_supported,
         capabilities.crypto_erase_supported,
         capabilities.sanitize_crypto_supported,
         capabilities.sanitize_block_supported,
         capabilities.sanitize_overwrite_supported,
+        capabilities.sanitize_reachable,
+        dlfeat,
         oacs,
         fna,
         sanicap,
@@ -302,10 +481,33 @@ def read_sanitize_status(controller_path: str) -> SanitizeLog | None:
     payload = _nvme_json(["sanitize-log", controller_path, "--rae"])
     if payload is None:
         payload = _nvme_json(["sanitize-log", controller_path])
-    if isinstance(payload, dict):
+    # The log body, which on nvme-cli 2.x sits one level down under the device
+    # name rather than at the top level.
+    body = _unwrap_device(
+        payload, "sstat", "status", "sanitize_status", "sprog", "cdw10_info"
+    )
+
+    decoded_erased: bool | None = None
+
+    if isinstance(body, dict):
         # nvme-cli has used several spellings for these fields over the years.
-        status_raw = _first_present(payload, "sstat", "status", "sanitize_status")
-        progress_raw = _first_present(payload, "sprog", "progress", "sanitize_progress")
+        status_raw = _first_present(body, "sstat", "status", "sanitize_status")
+        progress_raw = _first_present(body, "sprog", "progress", "sanitize_progress")
+
+        # SSTAT may arrive as an object of already-decoded fields rather than
+        # as the register:
+        #     "sstat": {"global_erased": 1, "no_cmplted_passes": 0,
+        #               "status": "(1) Most Recent Sanitize Command ..."}
+        # This is the ONLY place Global Data Erased is reported faithfully.
+        # The human-readable output prints SSTAT with bit 8 masked off, so
+        # decoding the flag from that register always yields false - which is
+        # how a purged drive came to be certified as one whose controller had
+        # not set the bit.
+        if isinstance(status_raw, dict):
+            erased_field = _first_present(status_raw, "global_erased")
+            if erased_field is not None:
+                decoded_erased = bool(_coerce_register(erased_field))
+            status_raw = _first_present(status_raw, "status", "sanitize_status")
         # "cdw10_info" is what nvme-cli actually emits - confirmed by reading
         # the key strings out of bookworm's own binary (2.4+really2.3-3). The
         # other spellings were guesses, none of them matched, and SCDW10
@@ -313,7 +515,7 @@ def read_sanitize_status(controller_path: str) -> SanitizeLog | None:
         # page showed 0x2. A guessed key name is indistinguishable from a
         # controller that reported nothing.
         command_raw = _first_present(
-            payload, "cdw10_info", "scdw10", "sanitize_cdw10", "cdw10", "SCDW10"
+            body, "cdw10_info", "scdw10", "sanitize_cdw10", "cdw10", "SCDW10"
         )
 
     # A MISSING field is not a field reading zero, and conflating the two is
@@ -349,18 +551,41 @@ def read_sanitize_status(controller_path: str) -> SanitizeLog | None:
             return None
         status_raw, progress_raw, command_raw = parsed
 
-    raw_sstat = _coerce_register(status_raw)
-    progress = _coerce_register(progress_raw)
-    status = raw_sstat & _SSTAT_STATUS_MASK
+        # The SSTAT hex on the line above this one has bit 8 masked off, so the
+        # flag has to come from nvme-cli's decoded line instead of from the
+        # register it is printed beside.
+        flag = _GLOBAL_ERASED_TEXT.search(text.stdout)
+        if flag is not None:
+            decoded_erased = flag.group("state").lower() == "set"
 
-    # nvme-cli reports the Global Data Erased bit directly as well as inside
-    # SSTAT. Prefer its answer when present; fall back to decoding the bit.
-    erased_raw = _first_present(payload, "global_erased") if isinstance(payload, dict) else None
+    progress = _coerce_register(progress_raw)
+
+    status = _coerce_status(status_raw)
+    if status is None:
+        # Unreadable is not "never sanitized". Reporting a drive as unerased
+        # when it has in fact been erased is a certificate-grade error, and so
+        # is the reverse, so neither is guessed at.
+        _log.warning(
+            "%s sanitize status could not be read from %r", controller_path, status_raw
+        )
+        return None
+
+    # Prefer the decoded flag over the register. The register printed by the
+    # human-readable output does not carry bit 8 at all, so decoding it there
+    # yields false for every drive; the decoded field is the only faithful
+    # source, and the register is used only when nothing decoded one.
+    raw_register = _coerce_register(status_raw)
     global_erased = (
-        bool(_coerce_register(erased_raw))
-        if erased_raw is not None
-        else bool(raw_sstat & _SSTAT_GLOBAL_DATA_ERASED)
+        decoded_erased
+        if decoded_erased is not None
+        else bool(raw_register & _SSTAT_GLOBAL_DATA_ERASED)
     )
+
+    # Rebuilt rather than taken from the register, so the recorded value agrees
+    # with the fields actually reported even when the register was masked.
+    raw_sstat = (raw_register & ~_SSTAT_GLOBAL_DATA_ERASED & ~_SSTAT_STATUS_MASK) | status
+    if global_erased:
+        raw_sstat |= _SSTAT_GLOBAL_DATA_ERASED
 
     if status == SSTAT_IN_PROGRESS:
         percent = round(progress / 65535 * 100, 1)
@@ -457,6 +682,26 @@ def enrich_nvme_devices(devices: list[Device]) -> None:
     listing = _index_nvme_list()
     for device in nvme_devices:
         device.nvme = read_capabilities(device.path)
+
+        if device.nvme is not None:
+            read_only, degraded, used = read_health(controller_path_for(device.path))
+            device.nvme.media_read_only = read_only
+            device.nvme.reliability_degraded = degraded
+            device.nvme.percentage_used = used
+            if read_only:
+                _log.error(
+                    "%s has placed its media in READ-ONLY mode (SMART critical "
+                    "warning bit 3). No erase can succeed on it; the controller "
+                    "answers format and sanitize with Access Denied.",
+                    device.path,
+                )
+            elif degraded:
+                _log.warning(
+                    "%s reports degraded reliability (SMART critical warning "
+                    "bit 2); %d%% of rated endurance used",
+                    device.path,
+                    used,
+                )
 
         entry = listing.get(device.path, {})
         if not device.serial:

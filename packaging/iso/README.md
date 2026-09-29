@@ -19,7 +19,7 @@ That builds the `.deb` first and hands it to the ISO build. To run the ISO stage
 alone against an existing package:
 
 ```sh
-sudo packaging/iso/build-iso.sh build/dist/zeroize_1.0.1_all.deb build/dist
+sudo packaging/iso/build-iso.sh build/dist/zeroize_1.1.0_all.deb build/dist
 ```
 
 In a container:
@@ -27,7 +27,7 @@ In a container:
 ```sh
 docker run --rm --privileged -v "$PWD":/src -w /src debian:12 \
   bash -c 'apt-get update && apt-get install -y live-build xorriso && \
-           packaging/iso/build-iso.sh build/dist/zeroize_1.0.1_all.deb build/dist'
+           packaging/iso/build-iso.sh build/dist/zeroize_1.1.0_all.deb build/dist'
 ```
 
 `--privileged` is needed because `live-build` mounts `/proc` and loop devices
@@ -57,7 +57,7 @@ python3 build.py deb
 
 # Build the ISO. The scratch tree must be on the Linux filesystem.
 sudo WORK_DIR=/var/tmp/zeroize-iso packaging/iso/build-iso.sh \
-    build/dist/zeroize_1.0.1_all.deb build/dist
+    build/dist/zeroize_1.1.0_all.deb build/dist
 ```
 
 **The one trap:** the build tree must never live on `/mnt/c`, `/mnt/d` or any

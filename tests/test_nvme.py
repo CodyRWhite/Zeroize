@@ -253,3 +253,47 @@ class TestSanitizeStatusSourcing:
         assert log.status == SSTAT_COMPLETED
         assert log.succeeded
         assert log.records_action(2)
+
+
+class TestStatusExplanations:
+    """Refusals are explained in the words nvme-cli actually prints.
+
+    "Access Denied" on a drive whose registers advertise Sanitize is not a
+    failed erase - it is the controller declining, and the operator needs to
+    know what is holding the namespace rather than be told the wipe did not
+    work. On a used drive that is nearly always Opal locking or namespace
+    write protection, and the remedies differ.
+
+    Matched on text because nvme-cli does not reliably expose the numeric
+    status through its exit code. The first version of this matched on prose
+    with spaces - "access denied" - while nvme-cli prints the symbol name,
+    "ACCESS_DENIED", so it fired on nothing at all, including the case it was
+    written for.
+    """
+
+    ACCESS_DENIED = (
+        "NVMe status: ACCESS_DENIED: Access to the namespace and or LBA range "
+        "is denied due to lack of access rights(0x286)"
+    )
+
+    def test_the_real_access_denied_text_is_explained(self):
+        from zeroize.erase.nvme_ops import _explain_status
+
+        explanation = _explain_status(self.ACCESS_DENIED)
+        assert explanation
+        assert "Opal" in explanation
+        assert "write protected" in explanation
+
+    def test_underscored_symbol_names_match(self):
+        """The separator, which is what broke the first attempt."""
+        from zeroize.erase.nvme_ops import _explain_status
+
+        assert _explain_status("NVMe status: INVALID_OPCODE(0x1)")
+        assert _explain_status("NVMe status: INVALID_FIELD(0x2)")
+
+    def test_an_unrecognised_failure_is_not_embellished(self):
+        """Inventing an explanation would be worse than offering none."""
+        from zeroize.erase.nvme_ops import _explain_status
+
+        assert _explain_status("timed out after 30s") == ""
+        assert _explain_status("") == ""

@@ -22,7 +22,7 @@ from __future__ import annotations
 __app_name__ = "Zeroize Drive Wiper"
 __short_name__ = "Zeroize"
 __tagline__ = "Purge-grade drive erasure"
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 
 #: Short machine-readable identifier - binary name, log directory, polkit
 #: action suffix, and the package name in both the .deb and the .rpm.

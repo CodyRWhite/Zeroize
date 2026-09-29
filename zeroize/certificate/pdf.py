@@ -29,6 +29,7 @@ look are built by :func:`_field_table`.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -65,6 +66,7 @@ from ..branding import (
     wordmark_letterspacing,
 )
 from ..config import Organisation, Settings
+from ..logging_setup import get_logger
 from ..models import EraseResult, Partition, RunSummary, format_duration, format_size
 from .naming import certificate_id, format_certificate_datetime
 
@@ -729,8 +731,32 @@ def _attributes_rows(result: EraseResult, settings: Settings) -> list[tuple[str,
         ("Passes", str(method.pass_count) if method.pass_count else "1 (firmware command)"),
         ("Verification", verification),
         ("Process Integrity", "Uninterrupted erase" if result.uninterrupted else "Interrupted"),
-        ("Verification depth", f"{settings.erase.verification_percent:.0f}% requested"),
+        ("Verification depth", _depth_note(result, settings)),
     ]
+
+
+def _depth_note(result: EraseResult, settings: Settings) -> str:
+    """The requested verification depth, and why the sample differs from it.
+
+    The sampler caps itself at a fixed number of windows so that verifying a
+    very large drive stays bounded in time. On anything past a few hundred
+    gigabytes that cap binds before the percentage does, and the certificate
+    then shows a sampled figure well below the requested one. Stated plainly
+    here, because a reader comparing the two numbers unaided would reasonably
+    conclude the tool had failed to do what it was configured to do.
+    """
+    requested = settings.erase.verification_percent
+    sampled = result.verification_percent
+
+    if requested <= 0:
+        return "not requested"
+    if sampled <= 0 or sampled >= requested - 0.05:
+        return f"{requested:.0f}% requested"
+    return (
+        f"{requested:.0f}% requested; {sampled:.1f}% sampled - the sampler's "
+        "window limit was reached first, which bounds the time taken on large "
+        "drives"
+    )
 
 
 def _disk_rows(result: EraseResult) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -1070,7 +1096,77 @@ def render_certificate(
         story += _command_appendix(summary, styles, content_width)
 
     document.build(story)
+
+    _confirm_written(output_path)
     return output_path
+
+
+_log = get_logger("Certificate")
+
+#: A PDF always starts with this. Checked so that a file which exists but did
+#: not survive the write is not mistaken for a certificate.
+_PDF_MAGIC = b"%PDF-"
+
+
+class CertificateNotWritten(OSError):
+    """The certificate could not be read back after being written."""
+
+
+def _confirm_written(output_path: Path) -> None:
+    """Flush the certificate to the medium and read it back.
+
+    Returning as soon as build() returns is not enough. The output volume is
+    usually removable, and a removable volume can go stale underneath a mount -
+    we saw exactly that on the test bench, where a mount whose device had gone
+    away accepted every write, reported success, and held nothing. Because the
+    certificate is written after the erase, discovering that later means
+    discovering it when there is nothing left to re-run.
+
+    So the file is fsynced, its directory is fsynced so the entry itself is
+    durable, and then it is reopened and checked for a plausible size and a PDF
+    header. Anything short of that raises, and the caller can fall back to
+    another location while the operator is still standing there.
+    """
+    try:
+        handle = output_path.open("rb+")
+    except OSError as error:
+        raise CertificateNotWritten(f"{output_path} could not be reopened: {error}") from error
+
+    with handle:
+        os.fsync(handle.fileno())
+
+    # The file's own fsync does not make its directory entry durable. On a
+    # FAT32 stick pulled straight after a run, that is the difference between
+    # a certificate and an empty directory.
+    try:
+        directory = os.open(str(output_path.parent), os.O_RDONLY)
+    except OSError:
+        directory = -1
+    if directory >= 0:
+        try:
+            os.fsync(directory)
+        except OSError:
+            # Not every filesystem allows fsync on a directory. The file's own
+            # flush has already happened, so this is a bonus, not a barrier.
+            pass
+        finally:
+            os.close(directory)
+
+    try:
+        head = output_path.open("rb").read(len(_PDF_MAGIC))
+        size = output_path.stat().st_size
+    except OSError as error:
+        raise CertificateNotWritten(f"{output_path} could not be read back: {error}") from error
+
+    if not head.startswith(_PDF_MAGIC):
+        raise CertificateNotWritten(
+            f"{output_path} does not begin with a PDF header; the volume may have "
+            "gone away mid-write"
+        )
+    if size < 1024:
+        raise CertificateNotWritten(f"{output_path} read back as only {size} bytes")
+
+    _log.info("Certificate confirmed on disk: %s (%d bytes)", output_path, size)
 
 
 def write_json_sidecar(summary: RunSummary, settings: Settings, output_path: Path) -> Path:

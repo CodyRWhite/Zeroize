@@ -45,6 +45,22 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.1.0" date="2026-09-29">
+      <description>
+        <p>
+          Support for NVMe controllers that advertise Sanitize and then refuse
+          to run it, and stronger checks on what the certificate claims.
+        </p>
+        <ul>
+          <li>Detects a controller that is refusing a firmware erase, and offers to clear it</li>
+          <li>Confirms a drive's serial number immediately before erasing it</li>
+          <li>Reports the Global Data Erased flag correctly on the certificate</li>
+          <li>Reads the processor name rather than its numeric model id</li>
+          <li>Explains why a verification sample is smaller than the depth requested</li>
+          <li>Confirms the certificate reached the medium before reporting success</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-09-28">
       <description>
         <p>

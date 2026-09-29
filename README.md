@@ -113,14 +113,14 @@ command instead. Zeroize states this and lets the operator decide.
 ### Debian / Ubuntu
 
 ```sh
-sudo apt install ./zeroize_1.0.1_all.deb
+sudo apt install ./zeroize_1.1.0_all.deb
 ```
 
 ### Fedora / RHEL / openSUSE
 
 ```sh
-sudo dnf install ./zeroize-1.0.1-1.noarch.rpm     # Fedora, RHEL
-sudo zypper install ./zeroize-1.0.1-1.noarch.rpm  # openSUSE
+sudo dnf install ./zeroize-1.1.0-1.noarch.rpm     # Fedora, RHEL
+sudo zypper install ./zeroize-1.1.0-1.noarch.rpm  # openSUSE
 ```
 
 Dependencies come from the distribution archive; nothing is vendored. Zeroize
