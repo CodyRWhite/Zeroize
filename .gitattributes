@@ -18,3 +18,12 @@ packaging/share/bin/zeroize text eol=lf
 *.iso           binary
 *.deb           binary
 *.rpm           binary
+
+# live-build hooks are executed by their shebang and carry no .sh suffix, so
+# the rule above them is the only thing that applied - and it did not survive
+# a Windows editor round trip. A CR in the shebang makes the kernel look for
+# an interpreter whose name ends in a carriage return. No such file exists,
+# and live-build reports that as the HOOK being not found, which sends you
+# looking at the wrong file entirely.
+*.hook.binary   text eol=lf
+*.hook.chroot   text eol=lf

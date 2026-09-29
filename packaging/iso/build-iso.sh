@@ -19,7 +19,7 @@
 # In a container:
 #   docker run --rm --privileged -v "$PWD":/src -w /src debian:12 \
 #     bash -c 'apt-get update && apt-get install -y live-build xorriso &&
-#              packaging/iso/build-iso.sh build/dist/zeroize_1.0.1_all.deb build/dist'
+#              packaging/iso/build-iso.sh build/dist/zeroize_1.1.0_all.deb build/dist'
 #
 # --privileged is needed because live-build mounts /proc and loop devices
 # inside the chroot it assembles.
@@ -272,6 +272,19 @@ nano
 # leave the entries they were not asked about alone.
 fatresize
 dosfstools
+# Remote access for diagnostics, and the networking to reach it.
+#
+# sshd is installed but NOT enabled: the hook below disables the unit and
+# deletes the host keys that installing the package generates. Shipping those
+# would put the same private host key on every machine that boots this image.
+# The session script starts sshd only when it finds an authorized_keys file on
+# the diagnostics volume, so enabling remote access is a deliberate physical
+# act rather than a property of the image.
+openssh-server
+# NetworkManager brings wired DHCP up by itself, which nothing else in this
+# list does - the image had no network configuration at all before this.
+network-manager
+network-manager-gnome
 PACKAGES
 
 # ---------------------------------------------------------------------------
@@ -477,6 +490,120 @@ done
 # vfat needs to be resident before udisks or mount is asked for it; on a live
 # image nothing else will have pulled it in yet.
 modprobe vfat 2>/dev/null || log "could not load the vfat module"
+
+# The diagnostics volume, if one is attached.
+#
+# Same reasoning as the output volume below: it is present at boot rather than
+# hotplugged, so nothing else mounts it. It matters more than it looks - the
+# boot medium cannot be pulled to retrieve a log without tearing down the live
+# session, because the squashfs the running system reads from goes with it. A
+# second, removable volume is the only way to get diagnostics off this machine
+# while it is still running, so it is mounted unconditionally and early,
+# before anything that might fail.
+DIAG_MOUNTPOINT=/media/diags
+DIAG_PART="$(blkid -L DIAGS 2>/dev/null || true)"
+if [ -z "$DIAG_PART" ]; then
+    log "no volume labelled DIAGS is attached"
+elif findmnt -n "$DIAG_MOUNTPOINT" >/dev/null 2>&1; then
+    log "$DIAG_MOUNTPOINT is already mounted"
+else
+    mkdir -p "$DIAG_MOUNTPOINT"
+    # umask=000 for the same reason as the output volume: root writes the
+    # reports through pkexec, the desktop user reads them.
+    if mount -t vfat -o rw,umask=000,flush "$DIAG_PART" "$DIAG_MOUNTPOINT" 2>/dev/null; then
+        log "mounted $DIAG_PART at $DIAG_MOUNTPOINT"
+    else
+        log "could not mount $DIAG_PART at $DIAG_MOUNTPOINT"
+    fi
+fi
+
+# Remote access: opt-in, key-only, and enabled by a physical act.
+#
+# sshd starts only when an authorized_keys file is found on the diagnostics
+# volume. No key on the stick, no sshd. A machine whose whole purpose is to
+# destroy the drives in front of it should not listen on the network because
+# of how it was built; it should listen because somebody deliberately put a key
+# on a removable volume and plugged it in. Password authentication is off
+# regardless - the live account has no password, and a published fixed username
+# with no password is not an account, it is an open door.
+SSH_KEYS=""
+for CANDIDATE in "$DIAG_MOUNTPOINT/authorized_keys"                  "$DIAG_MOUNTPOINT/Zeroize Diagnostics/authorized_keys"; do
+    if [ -f "$CANDIDATE" ]; then
+        SSH_KEYS="$CANDIDATE"
+        break
+    fi
+done
+
+if [ -z "$SSH_KEYS" ]; then
+    log "no authorized_keys on the diagnostics volume; sshd not started"
+elif [ ! -x /usr/sbin/sshd ]; then
+    log "authorized_keys found but sshd is not installed"
+else
+    install -d -m 0700 /root/.ssh
+    install -m 0600 "$SSH_KEYS" /root/.ssh/authorized_keys
+    log "installed the public key from $SSH_KEYS"
+
+    mkdir -p /etc/ssh/sshd_config.d
+    cat > /etc/ssh/sshd_config.d/10-zeroize.conf <<'SSHDCONF'
+# Key only. Root is the only account worth reaching here, because every
+# command a diagnostic runs is privileged anyway.
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+SSHDCONF
+
+    # Host keys are generated now rather than at build time, so each booted
+    # machine has its own. The image deliberately ships without any.
+    ssh-keygen -A >/dev/null 2>&1 || true
+
+    if systemctl start ssh.service 2>/dev/null; then
+        log "sshd started"
+
+        # Write the addresses and fingerprints to the stick, in the background
+        # and after waiting for an address.
+        #
+        # This script runs before the display manager, which is well before
+        # DHCP has finished - so reading the address list here records nothing
+        # and the file arrives with an empty Addresses section, which is how
+        # the first boot with sshd went. Waiting inline would delay the boot by
+        # however long the lease takes, on a machine that does not need the
+        # network to erase drives, so the wait is detached instead.
+        ACCESS="$DIAG_MOUNTPOINT/ssh-access.txt"
+        (
+            WAITED=0
+            while [ "$WAITED" -lt 120 ]; do
+                [ -n "$(ip -4 -o addr show scope global 2>/dev/null)" ] && break
+                sleep 2
+                WAITED=$(( WAITED + 2 ))
+            done
+        {
+            echo "Zeroize live session, $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "hostname: $(hostname 2>/dev/null)"
+            echo
+            echo "Addresses:"
+            ip -4 -o addr show scope global 2>/dev/null |
+                while read -r _ IFACE _ CIDR _; do
+                    echo "  ssh root@${CIDR%%/*}    ($IFACE)"
+                done
+            echo
+            echo "Host key fingerprints:"
+            for KEY in /etc/ssh/ssh_host_*_key.pub; do
+                [ -f "$KEY" ] && ssh-keygen -lf "$KEY" 2>/dev/null | sed 's/^/  /'
+            done
+        } > "$ACCESS" 2>/dev/null || true
+            sync
+            log "ssh access details written to $ACCESS"
+
+            ip -4 -o addr show scope global 2>/dev/null |
+                while read -r _ IFACE _ CIDR _; do
+                    log "reachable at ssh root@${CIDR%%/*} on $IFACE"
+                done
+        ) &
+    else
+        log "could not start sshd"
+    fi
+fi
 
 PART="$(blkid -L "$LABEL" 2>/dev/null || true)"
 if [ -z "$PART" ]; then
@@ -1014,6 +1141,17 @@ fi
 
 install -d -m 0755 /var/log/zeroize
 install -d -m 0755 /var/lib/zeroize
+
+# sshd off by default, and no host keys baked into the image.
+#
+# Installing openssh-server both enables the unit and generates host keys. Left
+# alone, every machine booting this image would listen on the network from the
+# moment it started, all of them sharing one private host key - so anyone with
+# a copy of the image could impersonate any of them. The session script
+# generates fresh keys and starts the service only when a key is present on the
+# diagnostics volume.
+systemctl disable ssh.service 2>/dev/null || true
+rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub || true
 
 # Nothing may lock the screen. The live account has no password, so a lock
 # is unrecoverable without a reboot - and a reboot in the middle of a wipe is
